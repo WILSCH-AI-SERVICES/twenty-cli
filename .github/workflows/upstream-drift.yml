@@ -1,0 +1,123 @@
+name: Upstream Drift
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: twenty-cli
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: twenty-cli
+          persist-credentials: false
+
+      - name: Checkout upstream Twenty
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: twentyhq/twenty
+          ref: main
+          path: twenty-upstream
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+          cache-dependency-path: twenty-cli/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI
+        run: pnpm build
+
+      - name: Run coverage audit
+        id: coverage
+        run: |
+          upstream_sha=$(git -C ../twenty-upstream rev-parse HEAD)
+          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+
+          set +e
+          node packages/twenty-sdk/dist/cli/cli.js coverage compare \
+            --upstream ../twenty-upstream \
+            --fail-on-unexpected \
+            -o json \
+            --full > /tmp/upstream-coverage-report.json
+          exit_code=$?
+          set -e
+
+          jq . /tmp/upstream-coverage-report.json
+          status=$(jq -r '.status' /tmp/upstream-coverage-report.json)
+          unexpected_count=$(jq -r '.summary["missing:unexpected"] // 0' /tmp/upstream-coverage-report.json)
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          echo "unexpected_count=${unexpected_count}" >> "$GITHUB_OUTPUT"
+
+          if [ "$exit_code" -ne 0 ] && [ "$status" != "missing_coverage" ]; then
+            exit "$exit_code"
+          fi
+
+      - name: Reconcile upstream drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing=$(gh issue list --label "upstream-drift" --state open --limit 1 --json number -q '.[0].number // empty')
+          status="${{ steps.coverage.outputs.status }}"
+          upstream_sha="${{ steps.coverage.outputs.upstream_sha }}"
+
+          if [ "$status" = "ok" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "The coverage auditor found no unexpected gaps against \`twentyhq/twenty@${upstream_sha}\`. Closing this stale heuristic drift issue."
+              gh issue close "$existing" --reason completed
+            fi
+            exit 0
+          fi
+
+          {
+            echo "The coverage auditor found unexpected first-class CLI coverage gaps against \`twentyhq/twenty@${upstream_sha}\`."
+            echo
+            echo "Summary:"
+            jq -r '.summary | to_entries[] | "- `\(.key)`: \(.value)"' /tmp/upstream-coverage-report.json
+            echo
+            echo "Unexpected gaps:"
+            jq -r '.unexpectedMissing[:50][] | "- `\(.surface)` `\(.name)` -> `\(.suggestedCommand)`"' /tmp/upstream-coverage-report.json
+            overflow=$(jq -r '([.unexpectedMissing | length, 50] | max) - 50' /tmp/upstream-coverage-report.json)
+            if [ "$overflow" -gt 0 ]; then
+              echo "- ...and ${overflow} more."
+            fi
+            echo
+            echo "Run locally:"
+            echo
+            echo "\`\`\`bash"
+            echo "pnpm build"
+            echo "node packages/twenty-sdk/dist/cli/cli.js coverage compare --upstream /path/to/twenty --fail-on-unexpected -o json --full"
+            echo "\`\`\`"
+          } > /tmp/upstream-drift-issue.md
+
+          gh label create upstream-drift --color "d93f0b" --force 2>/dev/null || true
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" \
+              --title "Upstream coverage drift: unexpected gaps" \
+              --body-file /tmp/upstream-drift-issue.md
+          else
+            gh issue create \
+              --title "Upstream coverage drift: unexpected gaps" \
+              --body-file /tmp/upstream-drift-issue.md \
+              --label "upstream-drift"
+          fi
+
+          exit 1

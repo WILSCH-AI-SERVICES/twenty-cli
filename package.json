@@ -1,0 +1,52 @@
+{
+  "name": "twenty-cli-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter ./packages/twenty-sdk build",
+    "check": "pnpm check:format && pnpm check:lint && pnpm check:types && pnpm check:test && pnpm check:knip",
+    "check:audit": "node scripts/check-runtime-audit.mjs",
+    "check:coverage": "pnpm --filter ./packages/twenty-sdk test:coverage",
+    "check:format": "pnpm format:check",
+    "check:knip": "pnpm knip",
+    "check:lint": "pnpm lint",
+    "check:repo-hygiene": "node scripts/check-repo-hygiene.mjs",
+    "check:test": "pnpm test",
+    "check:types": "pnpm typecheck",
+    "knip": "pnpm exec knip --no-progress --no-config-hints",
+    "readme:generate": "node scripts/render-readme-snippets.mjs",
+    "release:build": "node scripts/build-release.mjs",
+    "release:metadata": "node scripts/write-release-metadata.mjs",
+    "typecheck": "pnpm --filter ./packages/twenty-sdk typecheck",
+    "test": "pnpm --filter ./packages/twenty-sdk test",
+    "test:e2e": "pnpm --filter ./packages/twenty-sdk test:e2e",
+    "test:smoke:live": "pnpm --filter ./packages/twenty-sdk test:e2e:live",
+    "verify:ci": "pnpm check:audit && pnpm build && pnpm check:coverage && pnpm test:e2e && pnpm check:repo-hygiene && pnpm exec prek run --all-files",
+    "lint": "pnpm exec oxlint -c ./oxlint.config.json .",
+    "lint:fix": "pnpm exec oxlint -c ./oxlint.config.json --fix .",
+    "format": "pnpm exec oxfmt --write .",
+    "format:check": "pnpm exec oxfmt --check .",
+    "prek:install": "pnpm exec prek install",
+    "prek:run": "pnpm exec prek run --all-files",
+    "setup": "pnpm exec prek install"
+  },
+  "devDependencies": {
+    "@j178/prek": "0.4.5",
+    "@yao-pkg/pkg": "6.20.0",
+    "knip": "6.17.1",
+    "oxfmt": "0.55.0",
+    "oxlint": "1.70.0",
+    "oxlint-tsgolint": "0.23.0"
+  },
+  "engines": {
+    "node": "^24.5.0"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "pnpm": {
+    "overrides": {
+      "esbuild": "0.28.1",
+      "picomatch": "4.0.4",
+      "vite": "8.0.16"
+    }
+  }
+}

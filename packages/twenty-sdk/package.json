@@ -1,0 +1,75 @@
+{
+  "name": "@salmonumbrella/twenty-cli",
+  "version": "0.1.10",
+  "private": false,
+  "description": "CLI for Twenty CRM",
+  "keywords": [
+    "cli",
+    "crm",
+    "twenty"
+  ],
+  "homepage": "https://github.com/salmonumbrella/twenty-cli",
+  "bugs": {
+    "url": "https://github.com/salmonumbrella/twenty-cli/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/salmonumbrella/twenty-cli.git"
+  },
+  "bin": {
+    "twenty": "dist/cli/cli.js"
+  },
+  "files": [
+    "dist/**/*"
+  ],
+  "type": "commonjs",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/cli && cp src/cli/help.txt dist/cli/help.txt",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run -c vitest.config.ts",
+    "test:coverage": "vitest run -c vitest.config.ts --coverage",
+    "test:watch": "vitest -c vitest.config.ts",
+    "test:e2e": "pnpm run build && vitest run -c vitest.e2e.config.ts",
+    "test:e2e:live": "pnpm run build && TWENTY_LIVE_SMOKE=true vitest run -c vitest.e2e.config.ts src/cli/__tests__/e2e/helpers/live-config.spec.ts src/cli/__tests__/e2e/live-smoke.e2e.spec.ts"
+  },
+  "dependencies": {
+    "axios": "^1.18.0",
+    "axios-retry": "^4.1.0",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "form-data": "^4.0.6",
+    "fs-extra": "^11.3.5",
+    "jmespath": "^0.16.0",
+    "papaparse": "^5.4.1",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/jmespath": "^0.15.2",
+    "@types/node": "^25.5.2",
+    "@types/papaparse": "^5.3.14",
+    "@types/pg": "^8.20.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": "^24.5.0"
+  },
+  "pkg": {
+    "scripts": [
+      "dist/**/*.js",
+      "node_modules/axios/dist/node/axios.cjs"
+    ],
+    "assets": [
+      "dist/cli/help.txt",
+      "package.json"
+    ]
+  }
+}

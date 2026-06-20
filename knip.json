@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "ignoreBinaries": ["rg", "tar"],
+  "ignoreDependencies": ["@yao-pkg/pkg"],
+  "rules": {
+    "exports": "off",
+    "types": "off"
+  },
+  "workspaces": {
+    "packages/twenty-sdk": {
+      "entry": ["src/cli/__tests__/**/*.ts"],
+      "project": ["src/**/*.ts", "*.ts"],
+      "ignoreFiles": ["coverage/**", "src/cli/__tests__/e2e/helpers/fixtures/**"]
+    }
+  }
+}

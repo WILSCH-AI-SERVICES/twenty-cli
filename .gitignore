@@ -1,0 +1,44 @@
+# IDE & AI
+.vscode/
+.claude/
+.cursor/
+.specstory/
+CLAUDE.md
+*.swp
+*.swo
+*~
+
+# Agent artifacts
+.dm/
+.private-journal/
+.worktrees/
+.playwright-mcp/
+
+# Documentation (plans/drafts)
+docs/
+docs/superpowers/
+plans/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Binary
+/twenty
+
+# Build
+dist/
+coverage/
+!packages/twenty-sdk/src/cli/utilities/coverage/
+!packages/twenty-sdk/src/cli/utilities/coverage/**
+packages/twenty-sdk/benchmarks/
+node_modules/
+.pnpm-store/
+package-lock.json
+*.out
+*.test
+
+# OS
+.DS_Store
+Thumbs.db

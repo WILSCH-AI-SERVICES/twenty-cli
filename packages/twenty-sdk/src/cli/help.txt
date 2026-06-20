@@ -1,0 +1,135 @@
+twenty - CLI for Twenty
+
+Discovery:
+  twenty --help-json             Machine-readable root command tree
+  twenty --hj                    Short alias for --help-json
+  twenty CMD --help-json         Machine-readable contract for a command
+  twenty CMD --hj                Short alias for command help JSON
+  twenty CMD --help              Detailed Commander help for a command
+  Canonical command names, command aliases, and option aliases are all discoverable with --help-json
+
+Agent Use:
+  Prefer twenty CMD --help-json before executing mutations
+  Stable JSON fields: path, args, options, operations, capabilities, exit_codes, output_contract
+  In agent mode, failures print one JSON error object to stderr
+
+Env Precedence:
+  .env then .env.local then the explicit env file; existing environment variables win
+
+Auth & Workspace:
+  twenty auth list              List configured workspaces
+  twenty auth login             Save workspace metadata and write --token to .env or --env-file
+  twenty auth switch NAME       Switch the default workspace profile
+  twenty auth status            Show the active auth/config state
+  twenty auth workspace         Query the current workspace
+  twenty auth discover ORIGIN   Discover a public workspace by domain
+  twenty db status              Show db-first read diagnostics
+  twenty db doctor              Ping the resolved read-only DB URL with redacted diagnostics
+  twenty db benchmark           Compare strict API reads against strict DB reads
+  twenty db profile list        List cached db profiles
+
+Records:
+  twenty api list people -o json
+  twenty records people list -o json
+  twenty api get companies RECORD_ID
+  twenty api group-by people --field city
+  twenty api create notes --data '{"title":"Hello"}'
+  twenty search "acme" --objects person,company
+  Normal auto reads use the API, including agent mode
+  Use --rs api for a one-off API read or --rs db for strict DB benchmarking
+
+Metadata & Admin:
+  twenty api-metadata objects list
+  twenty metadata views list -o json
+  twenty api-metadata front-components list
+  twenty dashboards duplicate DASHBOARD_ID
+  twenty public-domains list
+  twenty emailing-domains list
+  twenty event-logs list --table workspace-event
+  twenty postgres-proxy get
+  twenty roles list --include-targets
+  twenty api-keys list
+  twenty approved-access-domains list
+  twenty route-triggers list
+  twenty skills list
+  twenty serverless list
+  twenty serverless logs SERVERLESS_FUNCTION_ID --max-events 1 -o jsonl
+  twenty serverless create-layer --package-json '{"dependencies":{}}' --yarn-lock 'lockfile'
+  twenty applications list
+  twenty applications create-development com.example.app --name 'Example App'
+  twenty application-registrations list
+  twenty application-registrations tarball-url APPLICATION_REGISTRATION_ID
+  twenty marketplace-apps list
+
+Integrations:
+  twenty webhooks list
+  twenty routes invoke ROUTE_PATH
+  twenty workflows invoke-webhook WORKFLOW_ID
+  twenty workflows run WORKFLOW_VERSION_ID --data '{"source":"cli"}'
+  twenty workflows stop-run WORKFLOW_RUN_ID
+  twenty connected-accounts list
+  twenty connected-accounts get-imap-smtp-caldav ACCOUNT_ID
+  twenty message-channels list
+  twenty calendar-channels list
+  twenty files upload PATH --target application-file
+  twenty files upload PATH --target app-tarball
+  twenty mcp status
+  twenty mcp catalog -o json
+  twenty mcp schema find_companies
+  twenty mcp exec find_companies --data '{"query":"Acme"}'
+
+Raw Access:
+  twenty openapi core
+  twenty graphql currentUser --selection 'id email'
+  twenty schema refresh -o json
+  twenty schema status
+  twenty raw graphql query --document 'query { currentWorkspace { id } }'
+  twenty raw graphql schema --output-file schema.json
+  twenty raw rest GET /health
+
+Common Flags:
+  -o, --output <json|jsonl|csv|text>  Output format
+  --query <expr>                JMESPath filter on rendered output
+  --workspace <name>            Workspace profile from ~/.twenty/config.json
+  --env-file <path>             Load .env/.env.local plus an explicit env file
+  --debug                       Show request/response details
+  --no-retry                    Disable automatic retry
+  --light, --li                 Render compact short-key JSON
+  --full                        Render canonical full JSON
+  --agent-mode, --ai            Force JSON output with light payloads by default
+  --read-source, --rs <source>  Override supported read backend: auto, api, db
+
+Output Guarantees:
+  no-flag output is compact JSON
+  --query runs before light projection and output formatting
+  --light/--li renders compact short-key JSON fields
+  --full renders canonical JSON field names
+  --agent-mode forces JSON and behaves like --li unless --full is present
+  agent-mode failures print one JSON error object to stderr
+  jsonl renders one compact JSON record per line
+  csv wraps singleton values, JSON-encodes nested objects/arrays, and escapes spreadsheet formulas
+  text renders best-effort tables
+
+Environment:
+  TWENTY_API_TOKEN                  API token from .env, .env.local, --env-file, or shell
+  TWENTY_BASE_URL               Base URL (default: https://api.twenty.com)
+  TWENTY_PROFILE                Default workspace profile
+  TWENTY_DB_PROFILE             Default db profile
+  TWENTY_DATABASE_URL           Default database URL
+  TWENTY_DATABASE_SCHEMA        Optional workspace DB schema
+  TWENTY_OUTPUT                 Default output format
+  TWENTY_AGENT_MODE             Enable agent mode (true/false)
+  TWENTY_QUERY                  Default JMESPath output filter
+  TWENTY_ENV_FILE               Default explicit env file path
+  TWENTY_DEBUG                  Enable debug output (true/false)
+  TWENTY_NO_RETRY               Disable retries (true/false)
+
+Exit Codes:
+  0  Success, help output, or version output
+  1  General or unexpected error
+  2  Invalid arguments or command usage error
+  3  Authentication or permission error
+  4  Network error or request failed before a response
+  5  Rate limited (429)
+
+Use "twenty CMD --help" for command-specific details.

@@ -1,0 +1,14 @@
+import { CliError } from "../../../utilities/errors/cli-error";
+import { ApiMetadataContext } from "./types";
+
+export async function runObjectsGet(ctx: ApiMetadataContext): Promise<void> {
+  const id = ctx.arg;
+  if (!id) {
+    throw new CliError("Missing object identifier.", "INVALID_ARGUMENTS");
+  }
+  const object = await ctx.services.metadata.getObject(id);
+  await ctx.services.output.render(object, {
+    format: ctx.globalOptions.output,
+    query: ctx.globalOptions.query,
+  });
+}

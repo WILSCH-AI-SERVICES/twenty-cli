@@ -1,0 +1,61 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import", "unicorn"],
+  "options": {
+    "typeAware": true
+  },
+  "categories": {
+    "correctness": "off"
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "coverage",
+    "docs",
+    "packages/twenty-sdk/dist",
+    "packages/twenty-sdk/coverage"
+  ],
+  "rules": {
+    "func-style": ["error", "declaration", { "allowArrowFunctions": true }],
+    "no-console": "warn",
+    "no-control-regex": "off",
+    "no-debugger": "error",
+    "no-duplicate-imports": "error",
+    "no-redeclare": "off",
+    "no-undef": "off",
+    "no-unused-vars": "off",
+    "import/no-duplicates": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/consistent-type-imports": "off",
+    "typescript/explicit-function-return-type": "off",
+    "typescript/explicit-module-boundary-types": "off",
+    "typescript/no-empty-function": "off",
+    "typescript/no-empty-object-type": [
+      "error",
+      {
+        "allowInterfaces": "with-single-extends"
+      }
+    ],
+    "typescript/no-explicit-any": "warn",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-redeclare": "error",
+    "typescript/no-unused-vars": [
+      "warn",
+      {
+        "vars": "all",
+        "varsIgnorePattern": "^_",
+        "args": "after-used",
+        "argsIgnorePattern": "^_"
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.spec.ts", "**/*.integration-spec.ts", "**/__tests__/**", "**/test/**"],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
+    }
+  ]
+}
