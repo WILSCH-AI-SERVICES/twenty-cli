@@ -31,12 +31,12 @@
     "setup": "pnpm exec prek install"
   },
   "devDependencies": {
-    "@j178/prek": "0.4.5",
-    "@yao-pkg/pkg": "6.20.0",
+    "@j178/prek": "0.5.2",
+    "@yao-pkg/pkg": "6.22.0",
     "knip": "6.17.1",
-    "oxfmt": "0.55.0",
-    "oxlint": "1.70.0",
-    "oxlint-tsgolint": "0.23.0"
+    "oxfmt": "0.67.0",
+    "oxlint": "1.82.0",
+    "oxlint-tsgolint": "7.0.2001"
   },
   "engines": {
     "node": "^24.5.0"
