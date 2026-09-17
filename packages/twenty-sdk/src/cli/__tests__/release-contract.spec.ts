@@ -20,6 +20,7 @@ describe("repo release consistency", () => {
     const sdkPackage = JSON.parse(readRepoFile("packages", "twenty-sdk", "package.json")) as {
       engines?: Record<string, string>;
       name?: string;
+      repository?: { url?: string };
       private?: boolean;
       files?: string[];
       dependencies?: Record<string, string>;
@@ -40,8 +41,9 @@ describe("repo release consistency", () => {
     const nvmrc = readRepoFile(".nvmrc").trim();
 
     expect(rootPackage.packageManager).toMatch(/^pnpm@/);
-    expect(rootPackage.engines?.node).toBe("^24.5.0");
-    expect(sdkPackage.engines?.node).toBe("^24.5.0");
+    // Fork (WILSCH-AI-SERVICES): the house's hosts run Node 25; see FORK.md.
+    expect(rootPackage.engines?.node).toBe(">=24.5.0");
+    expect(sdkPackage.engines?.node).toBe(">=24.5.0");
     expect(nvmrc).toBe("24.16.0");
     expect(rootPackage.scripts).toMatchObject({
       "check:audit": "node scripts/check-runtime-audit.mjs",
@@ -54,7 +56,8 @@ describe("repo release consistency", () => {
       "verify:ci":
         "pnpm check:audit && pnpm build && pnpm check:coverage && pnpm test:e2e && pnpm check:repo-hygiene && pnpm exec prek run --all-files",
     });
-    expect(sdkPackage.name).toBe("@salmonumbrella/twenty-cli");
+    expect(sdkPackage.name).toBe("@wilsch-ai-services/twenty-cli");
+    expect(sdkPackage.repository?.url).toContain("WILSCH-AI-SERVICES/twenty-cli");
     expect(sdkPackage.private).toBe(false);
     expect(sdkPackage.files).toEqual(expect.arrayContaining(["dist/**/*"]));
     expect(sdkPackage.dependencies?.["form-data"]).toBeDefined();
@@ -91,9 +94,11 @@ describe("repo release consistency", () => {
     expect(releaseWorkflow).toContain("pnpm check:audit");
     expect(releaseWorkflow).not.toContain("setup-go");
     expect(releaseWorkflow).not.toContain("goreleaser");
-    expect(releaseWorkflow).toContain("uses: ./.github/workflows/live-smoke.yml");
-    expect(releaseWorkflow).toContain("secrets: inherit");
-    expect(releaseWorkflow).toContain("needs: [verify, live-smoke]");
+    // Fork (WILSCH-AI-SERVICES): release is not gated on the upstream's live-smoke
+    // environment and dispatches no Homebrew tap; parity against the house's instance is
+    // `twenty parity check`, run from the host.
+    expect(releaseWorkflow).not.toContain("live-smoke.yml");
+    expect(releaseWorkflow).toContain("needs: [verify]");
     expect(releaseWorkflow).toContain("contents: read");
     expect(releaseWorkflow).toContain("contents: write");
     expect(releaseWorkflow).toContain("pnpm release:build");
@@ -101,8 +106,8 @@ describe("repo release consistency", () => {
     expect(releaseWorkflow).toContain("actions/upload-artifact@v7");
     expect(releaseWorkflow).toContain("actions/download-artifact@v8");
     expect(releaseWorkflow).toContain("checksums.txt");
-    expect(releaseWorkflow).toContain("HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}");
-    expect(releaseWorkflow).toContain("if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}");
+    expect(releaseWorkflow).not.toContain("HOMEBREW_TAP_TOKEN");
+    expect(releaseWorkflow).not.toContain("homebrew-tap");
     expect(releaseWorkflow).toContain("NPM_TOKEN: ${{ secrets.NPM_TOKEN }}");
     expect(releaseWorkflow).toContain("if: ${{ env.NPM_TOKEN != '' }}");
     expect(releaseWorkflow).toContain(

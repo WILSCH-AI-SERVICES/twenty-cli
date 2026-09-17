@@ -40,18 +40,11 @@ jobs:
       - name: Lint, format, and typecheck
         run: pnpm exec prek run --all-files
 
-  live-smoke:
-    needs: verify
-    uses: ./.github/workflows/live-smoke.yml
-    with:
-      base_url: ${{ vars.TWENTY_LIVE_BASE_URL }}
-      workspace: ${{ vars.TWENTY_LIVE_WORKSPACE }}
-    secrets: inherit
-    permissions:
-      contents: read
-
+  # Fork note (WILSCH-AI-SERVICES): the upstream gated release on a `live-smoke` job that
+  # needs a GitHub environment and secrets this fork does not carry; parity against the
+  # house's instance is `twenty parity check`, run from the host, not from CI.
   build-release:
-    needs: [verify, live-smoke]
+    needs: [verify]
     strategy:
       matrix:
         include:
@@ -107,7 +100,6 @@ jobs:
     permissions:
       contents: write
     env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -169,16 +161,5 @@ jobs:
               --generate-notes
           fi
 
-      - name: Update Homebrew formula
-        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
-        run: |
-          gh api repos/${{ github.repository_owner }}/homebrew-tap/dispatches \
-            -f event_type=update-formula \
-            -f 'client_payload[repo]=${{ github.repository }}' \
-            -f 'client_payload[version]=${{ github.ref_name }}' \
-            -f 'client_payload[binary_name]=twenty' \
-            -f 'client_payload[formula_name]=twenty-cli' \
-            -f 'client_payload[description]=CLI for Twenty CRM' \
-            -f 'client_payload[archive_prefix]=twenty'
-        env:
-          GH_TOKEN: ${{ env.HOMEBREW_TAP_TOKEN }}
+      # Fork note (WILSCH-AI-SERVICES): the upstream's Homebrew-tap dispatch is removed;
+      # the house has no tap. Release assets on this repository are the distribution.

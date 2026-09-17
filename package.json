@@ -39,7 +39,7 @@
     "oxlint-tsgolint": "0.23.0"
   },
   "engines": {
-    "node": "^24.5.0"
+    "node": ">=24.5.0"
   },
   "packageManager": "pnpm@10.28.0",
   "pnpm": {

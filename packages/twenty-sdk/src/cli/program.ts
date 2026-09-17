@@ -8,6 +8,7 @@ import { registerApplicationsCommand } from "./commands/applications/application
 import { registerApprovedAccessDomainsCommand } from "./commands/approved-access-domains/approved-access-domains.command";
 import { registerAuthCommand } from "./commands/auth/auth.command";
 import { registerCalendarChannelsCommand } from "./commands/calendar-channels/calendar-channels.command";
+import { registerConfigCommand } from "./commands/config/config.command";
 import { registerConnectedAccountsCommand } from "./commands/connected-accounts/connected-accounts.command";
 import { registerCoverageCommand } from "./commands/coverage/coverage.command";
 import { registerDashboardsCommand } from "./commands/dashboards/dashboards.command";
@@ -20,6 +21,7 @@ import { registerMarketplaceAppsCommand } from "./commands/marketplace-apps/mark
 import { registerMcpCommand } from "./commands/mcp/mcp.command";
 import { registerMessageChannelsCommand } from "./commands/message-channels/message-channels.command";
 import { registerOpenApiCommand } from "./commands/openapi/openapi.command";
+import { registerParityCommand } from "./commands/parity/parity.command";
 import { registerPostgresProxyCommand } from "./commands/postgres-proxy/postgres-proxy.command";
 import { registerPublicDomainsCommand } from "./commands/public-domains/public-domains.command";
 import { registerRawCommand } from "./commands/raw/raw.command";
@@ -35,13 +37,15 @@ import { registerWorkflowsCommand } from "./commands/workflows/workflows.command
 import { registerCachedSchemaCommands } from "./utilities/schema/schema-command-materializer";
 import { applyCommandAliases } from "./utilities/shared/command-aliases";
 import { applyGlobalOptions } from "./utilities/shared/global-options";
-import { CLI_VERSION } from "./version";
+import { formatVersionLine } from "./version";
 
 export function buildProgram(): Command {
   const program = new Command();
   program.name("twenty");
-  program.description("Twenty CLI (TypeScript port)");
-  program.version(CLI_VERSION);
+  program.description("Twenty CLI (TypeScript port) — WILSCH-AI-SERVICES fork");
+  // The fork's version line carries its build commit and the upstream it was cut from, so
+  // a harness that records `twenty --version` records provenance, not a bare number.
+  program.version(formatVersionLine());
   applyGlobalOptions(program);
   program.exitOverride();
 
@@ -78,6 +82,9 @@ export function buildProgram(): Command {
   registerMcpCommand(program);
   registerSkillsCommand(program);
   registerWorkflowsCommand(program);
+  // Fork (WILSCH-AI-SERVICES): the configuration read-back and the parity check.
+  registerConfigCommand(program);
+  registerParityCommand(program);
   applyCommandAliases(program);
 
   return program;

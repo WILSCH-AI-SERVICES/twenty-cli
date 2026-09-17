@@ -280,6 +280,33 @@ export const METADATA: Record<string, HelpMetadata> = {
       'twenty mcp exec find_companies --data \'{"query":"Acme"}\'',
     ],
   },
+  "twenty config": {
+    examples: [
+      "twenty config export > workspace-config.json",
+      "twenty config export --output-file workspace-config.json",
+    ],
+  },
+  "twenty config export": {
+    mutates: false,
+    examples: [
+      "twenty config export > workspace-config.json",
+      "twenty config export --output-file workspace-config.json",
+    ],
+  },
+  "twenty parity": {
+    examples: [
+      "twenty parity check -o text",
+      "twenty parity check --object leads --trail-object notes",
+    ],
+  },
+  "twenty parity check": {
+    mutates: true,
+    examples: [
+      "twenty parity check -o text",
+      "twenty parity check --keep -o json",
+      "twenty parity check --object leads --trail-object notes --trail-relation leadId",
+    ],
+  },
   "twenty roles": {
     operations: [
       {

@@ -1,21 +1,21 @@
 {
-  "name": "@salmonumbrella/twenty-cli",
-  "version": "0.1.10",
+  "name": "@wilsch-ai-services/twenty-cli",
+  "version": "0.1.15-wilsch.1",
   "private": false,
-  "description": "CLI for Twenty CRM",
+  "description": "CLI for Twenty CRM — the WILSCH-AI-SERVICES fork of salmonumbrella/twenty-cli",
   "keywords": [
     "cli",
     "crm",
     "twenty"
   ],
-  "homepage": "https://github.com/salmonumbrella/twenty-cli",
+  "homepage": "https://github.com/WILSCH-AI-SERVICES/twenty-cli",
   "bugs": {
-    "url": "https://github.com/salmonumbrella/twenty-cli/issues"
+    "url": "https://github.com/WILSCH-AI-SERVICES/twenty-cli/issues"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/salmonumbrella/twenty-cli.git"
+    "url": "git+https://github.com/WILSCH-AI-SERVICES/twenty-cli.git"
   },
   "bin": {
     "twenty": "dist/cli/cli.js"
@@ -28,7 +28,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && mkdir -p dist/cli && cp src/cli/help.txt dist/cli/help.txt",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/cli && cp src/cli/help.txt dist/cli/help.txt && node ../../scripts/write-build-info.mjs",
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run -c vitest.config.ts",
@@ -60,7 +60,7 @@
     "vitest": "^4.1.9"
   },
   "engines": {
-    "node": "^24.5.0"
+    "node": ">=24.5.0"
   },
   "pkg": {
     "scripts": [
