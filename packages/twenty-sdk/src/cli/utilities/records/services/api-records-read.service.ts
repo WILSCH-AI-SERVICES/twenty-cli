@@ -90,7 +90,68 @@ export class ApiRecordsReadService {
     const response = await this.api.get(`/rest/${object}/${id}`, { params });
     const dataSection = getDataSection(response.data);
     const singular = singularize(object);
-    return dataSection[singular] ?? dataSection[object] ?? extractFirstValue(dataSection);
+    const record = dataSection[singular] ?? dataSection[object] ?? extractFirstValue(dataSection);
+
+    if (!options?.include || !isRecord(record)) return record;
+    return this.completeIncludedRelations(object, id, record, options.include);
+  }
+
+  /**
+   * The server serves an included to-many relation through
+   * QUERY_MAX_RECORDS_FROM_RELATION (60, compiled into twenty-shared) and in no
+   * guaranteed order, so a record whose relation is longer comes back truncated to
+   * its OLDEST 60 with nothing on the response marking it partial. Re-read each
+   * included to-many relation through the collection endpoint — which pages — and
+   * return it whole, ascending by createdAt so the newest entry is last.
+   */
+  private async completeIncludedRelations(
+    object: string,
+    id: string,
+    record: Record<string, unknown>,
+    include: string,
+  ): Promise<Record<string, unknown>> {
+    const foreignKey = `${singularize(object)}Id`;
+    const completed: Record<string, unknown> = { ...record };
+
+    for (const raw of include.split(",")) {
+      const relation = raw.trim();
+      if (!relation) continue;
+
+      const embedded = completed[relation];
+      // A to-one relation carries no ceiling and no order to restore.
+      if (!Array.isArray(embedded)) continue;
+
+      const whole = await this.readWholeRelation(relation, foreignKey, id);
+      completed[relation] = whole ?? sortByCreatedAt(embedded);
+    }
+
+    return completed;
+  }
+
+  /**
+   * Returns the whole relation, or undefined when it cannot be read as a
+   * collection — in which case the caller keeps whatever the record carried
+   * rather than losing the rows the server did send.
+   */
+  private async readWholeRelation(
+    relation: string,
+    foreignKey: string,
+    id: string,
+  ): Promise<unknown[] | undefined> {
+    const filter = `${foreignKey}[eq]:${id}`;
+
+    try {
+      const { data } = await this.listAll(relation, { filter, sort: "createdAt", order: "asc" });
+      return data;
+    } catch {
+      // The relation may carry no createdAt to sort on; take it unsorted and order it here.
+      try {
+        const { data } = await this.listAll(relation, { filter });
+        return sortByCreatedAt(data);
+      } catch {
+        return undefined;
+      }
+    }
   }
 
   async groupBy(object: string, payload?: unknown, params?: GroupByParams): Promise<unknown> {
@@ -199,4 +260,14 @@ function serializeFilter(filter: Record<string, unknown>): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Ascending by createdAt — the source's order, newest last. */
+function sortByCreatedAt(records: unknown[]): unknown[] {
+  return [...records].sort((a, b) => {
+    const left = isRecord(a) ? String(a.createdAt ?? "") : "";
+    const right = isRecord(b) ? String(b.createdAt ?? "") : "";
+    if (left === right) return 0;
+    return left < right ? -1 : 1;
+  });
 }
