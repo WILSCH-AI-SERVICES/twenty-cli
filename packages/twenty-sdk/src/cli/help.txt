@@ -39,6 +39,8 @@ Records:
   Use --rs api for a one-off API read or --rs db for strict DB benchmarking
 
 Metadata & Admin:
+  twenty config export --output-file workspace-config.json
+  twenty parity check -o text
   twenty api-metadata objects list
   twenty metadata views list -o json
   twenty api-metadata front-components list
