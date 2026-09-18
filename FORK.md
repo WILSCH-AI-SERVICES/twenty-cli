@@ -35,7 +35,7 @@ carrying the house's name, never bare `0.1.14`. The manifest in
 commit it was built from, and `twenty --version` reports both:
 
 ```
-0.1.15-wilsch.1 (WILSCH-AI-SERVICES/twenty-cli@<commit>; forked from salmonumbrella/twenty-cli@52d8965, released as v0.1.14, manifest 0.1.10)
+0.1.15-wilsch.2 (WILSCH-AI-SERVICES/twenty-cli@<commit>; forked from salmonumbrella/twenty-cli@52d8965, released as v0.1.14, manifest 0.1.10)
 ```
 
 A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not this fork.

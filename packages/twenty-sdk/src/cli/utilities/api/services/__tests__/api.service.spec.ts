@@ -561,5 +561,44 @@ describe("ApiService", () => {
 
       expect(() => responseErrorInterceptor(error)).toThrow();
     });
+
+    it("prints the failed response's body under --debug so the server's own words reach the caller", () => {
+      const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+      new ApiService(mockConfigService as any, { debug: true });
+
+      const error = {
+        response: {
+          status: 400,
+          data: {
+            statusCode: 400,
+            error: "BadRequestException",
+            messages: [
+              "A deal cannot reach closed-lost without a loss reason. Missing field: lossReason",
+            ],
+          },
+        },
+        message: "Request failed with status code 400",
+      };
+
+      expect(() => responseErrorInterceptor(error)).toThrow();
+
+      const lines = stderr.mock.calls.map((call) => String(call[0]));
+      expect(lines).toContain("← 400 Request failed with status code 400");
+      expect(
+        lines.some(
+          (line) => line.startsWith("  Response: ") && line.includes("Missing field: lossReason"),
+        ),
+      ).toBe(true);
+    });
+
+    it("prints no response line under --debug when the failure carried no body", () => {
+      const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+      new ApiService(mockConfigService as any, { debug: true });
+
+      expect(() => responseErrorInterceptor({ message: "socket hang up" })).toThrow();
+
+      const lines = stderr.mock.calls.map((call) => String(call[0]));
+      expect(lines).toEqual(["←  socket hang up"]);
+    });
   });
 });
