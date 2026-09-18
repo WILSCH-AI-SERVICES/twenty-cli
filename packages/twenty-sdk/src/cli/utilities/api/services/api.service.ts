@@ -28,6 +28,10 @@ export interface RequestResolution {
 
 type RequestConfigResolver = (config: InternalAxiosRequestConfig) => Promise<RequestResolution>;
 
+// How much of a failed response's body `--debug` prints. The server's refusal sentence is
+// what a terminal caller needs to hear whole; Twenty's error bodies are a few hundred bytes.
+const DEBUG_RESPONSE_PREVIEW_LIMIT = 2000;
+
 export function createHttpClient(
   resolveRequestConfig: RequestConfigResolver,
   options: SharedHttpServiceOptions = {},
@@ -99,6 +103,15 @@ export function createHttpClient(
       if (options.debug) {
         // eslint-disable-next-line no-console
         console.error(`← ${error.response?.status ?? ""} ${error.message}`);
+        // The server's own words travel in the response body. Without this line a caller
+        // hears only axios's "Request failed with status code 400" and cannot tell which
+        // field the store refused — the house's closed-lost rule names it there (lossReason).
+        if (error.response?.data !== undefined) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `  Response: ${stringifyDebugPreview(error.response.data, DEBUG_RESPONSE_PREVIEW_LIMIT)}`,
+          );
+        }
       }
       throw error;
     },
