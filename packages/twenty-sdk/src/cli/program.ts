@@ -32,6 +32,7 @@ import { registerSchemaCommand } from "./commands/schema/schema.command";
 import { registerSearchCommand } from "./commands/search/search.command";
 import { registerServerlessCommand } from "./commands/serverless/serverless.command";
 import { registerSkillsCommand } from "./commands/skills/skills.command";
+import { registerViewsCommand } from "./commands/views/views.command";
 import { registerWebhooksCommand } from "./commands/webhooks/webhooks.command";
 import { registerWorkflowsCommand } from "./commands/workflows/workflows.command";
 import { registerCachedSchemaCommands } from "./utilities/schema/schema-command-materializer";
@@ -82,9 +83,11 @@ export function buildProgram(): Command {
   registerMcpCommand(program);
   registerSkillsCommand(program);
   registerWorkflowsCommand(program);
-  // Fork (WILSCH-AI-SERVICES): the configuration read-back and the parity check.
+  // Fork (WILSCH-AI-SERVICES): the configuration read-back, the parity check, and saved
+  // views re-applied from a terminal.
   registerConfigCommand(program);
   registerParityCommand(program);
+  registerViewsCommand(program);
   applyCommandAliases(program);
 
   return program;
