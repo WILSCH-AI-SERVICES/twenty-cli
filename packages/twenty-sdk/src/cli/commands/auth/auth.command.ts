@@ -1,10 +1,12 @@
 import path from "path";
+import readline from "readline";
 
 import { Command } from "commander";
 
 import { requireGraphqlField, type GraphQLResponse } from "../../utilities/api/graphql-response";
 import { API_TOKEN_ENV_VAR } from "../../utilities/config/services/config.service";
 import { upsertEnvValue } from "../../utilities/config/services/environment.service";
+import { signInUserSession } from "../../utilities/config/services/user-session";
 import { CliError } from "../../utilities/errors/cli-error";
 import { createCommandContext } from "../../utilities/shared/context";
 import { applyGlobalOptions, resolveGlobalOptions } from "../../utilities/shared/global-options";
@@ -74,6 +76,42 @@ const PUBLIC_WORKSPACE_QUERY = `query GetPublicWorkspaceDataByDomain($origin: St
     }
   }
 }`;
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+/** Prompt on the terminal without echoing what is typed. */
+async function promptHidden(question: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new CliError(
+      `${question.trim()} needs a terminal.`,
+      "INVALID_ARGUMENTS",
+      "Run it in a terminal, or pass --password-stdin / --otp.",
+    );
+  }
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true,
+  });
+  const write = (rl as unknown as { _writeToOutput: (s: string) => void })._writeToOutput;
+  let asked = false;
+  (rl as unknown as { _writeToOutput: (s: string) => void })._writeToOutput = (s: string) => {
+    if (!asked) {
+      asked = true;
+      write.call(rl, s);
+    }
+  };
+  try {
+    return await new Promise<string>((resolve) => rl.question(question, resolve));
+  } finally {
+    rl.close();
+    process.stdout.write("\n");
+  }
+}
 
 function maskToken(token: string): string {
   if (token.length <= 8) return "****";
@@ -145,6 +183,7 @@ export function registerAuthCommand(program: Command): void {
         apiUrl: config.apiUrl,
         apiKey: options.showToken ? config.apiKey : maskToken(config.apiKey),
         tokenSource: config.tokenSource ?? "none",
+        ...(config.sessionEmail ? { signedInAs: config.sessionEmail } : {}),
       };
 
       await services.output.render(statusData, {
@@ -302,19 +341,57 @@ export function registerAuthCommand(program: Command): void {
   );
 
   // auth login
+  //
+  // The house's route (#3236) is `--email`: the person signs in once with their own
+  // password and, where the workspace enforces it, their second factor; the session lands
+  // in ~/.twenty/config.json (0600) and renews itself, so every later command — from any
+  // directory, with nothing exported — writes as that person. `--token` keeps the
+  // upstream's behaviour: an API key is written to a .env (or --env-file), never the config.
   authCmd
     .command("login")
-    .description("Configure API credentials")
+    .description("Sign in as yourself (--email), or store an API token (--token)")
+    .option("--email <email>", "Sign in as this person; prompts for password and second factor")
+    .option("--password-stdin", "Read the password from stdin instead of prompting")
+    .option("--otp <code>", "Second-factor code (prompted for when required and not given)")
     .option("--token <token>", "API token to write to .env or --env-file")
     .option("--base-url <url>", "API base URL", "https://api.twenty.com")
     .option("--workspace <name>", "Workspace name", "default")
     .option("--env-file <path>", "Load environment variables from file")
     .action(
       async (
-        options: { token?: string; baseUrl: string; workspace: string; envFile?: string },
+        options: {
+          email?: string;
+          passwordStdin?: boolean;
+          otp?: string;
+          token?: string;
+          baseUrl: string;
+          workspace: string;
+          envFile?: string;
+        },
         command: Command,
       ) => {
         const { services } = await createCommandContext(command);
+
+        if (options.email) {
+          const password = options.passwordStdin
+            ? (await readStdin()).replace(/\r?\n$/, "")
+            : await promptHidden(`Password for ${options.email}: `);
+          const session = await signInUserSession(
+            options.baseUrl,
+            options.email,
+            password,
+            async () => options.otp ?? (await promptHidden("Authenticator code: ")),
+          );
+          await services.config.saveWorkspace(options.workspace, {
+            apiUrl: options.baseUrl,
+            session,
+          });
+          // eslint-disable-next-line no-console
+          console.log(`Signed in to ${options.baseUrl} as ${session.email}.`);
+          // eslint-disable-next-line no-console
+          console.log(`Workspace "${options.workspace}" configured; the session renews itself.`);
+          return;
+        }
 
         await services.config.saveWorkspace(options.workspace, {
           apiUrl: options.baseUrl,
@@ -334,7 +411,7 @@ export function registerAuthCommand(program: Command): void {
         if (!options.token) {
           // eslint-disable-next-line no-console
           console.log(
-            `Set ${API_TOKEN_ENV_VAR} in .env, --env-file, or your shell before authenticated commands.`,
+            `Run "twenty auth login --email <you> --base-url ${options.baseUrl}" to sign in.`,
           );
         }
       },

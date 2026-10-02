@@ -1,6 +1,6 @@
 {
   "name": "@wilsch-ai-services/twenty-cli",
-  "version": "0.1.15-wilsch.2",
+  "version": "0.1.15-wilsch.3",
   "private": false,
   "description": "CLI for Twenty CRM — the WILSCH-AI-SERVICES fork of salmonumbrella/twenty-cli",
   "keywords": [

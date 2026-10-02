@@ -212,8 +212,84 @@ describe("auth commands", () => {
       });
       expect(upsertEnvValue).not.toHaveBeenCalled();
       expect(consoleSpy).toHaveBeenCalledWith(
-        "Set TWENTY_API_TOKEN in .env, --env-file, or your shell before authenticated commands.",
+        'Run "twenty auth login --email <you> --base-url https://api.twenty.com" to sign in.',
       );
+    });
+
+    it("signs in as a person with --email and stores the session, never a .env", async () => {
+      vi.mocked(ConfigService.prototype.saveWorkspace).mockResolvedValue(undefined);
+      const future = new Date(Date.now() + 3600_000).toISOString();
+      const tokens = {
+        accessOrWorkspaceAgnosticToken: { token: "access-1", expiresAt: future },
+        refreshToken: { token: "refresh-1", expiresAt: future },
+      };
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce({
+          json: async () => ({
+            data: { getLoginTokenFromCredentials: { loginToken: { token: "login-1" } } },
+          }),
+        })
+        .mockResolvedValueOnce({
+          json: async () => ({
+            errors: [
+              {
+                message: "Two factor authentication verification required",
+                extensions: { subCode: "TWO_FACTOR_AUTHENTICATION_VERIFICATION_REQUIRED" },
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({
+          json: async () => ({ data: { getAuthTokensFromOTP: { tokens } } }),
+        });
+      vi.stubGlobal("fetch", fetchSpy);
+      const stdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      Object.defineProperty(process, "stdin", {
+        configurable: true,
+        value: (async function* () {
+          yield Buffer.from("secret\n");
+        })(),
+      });
+
+      try {
+        await program.parseAsync([
+          "node",
+          "test",
+          "auth",
+          "login",
+          "--email",
+          "david@example.com",
+          "--password-stdin",
+          "--otp",
+          "123456",
+          "--base-url",
+          "https://crm.example.com",
+          "--workspace",
+          "house",
+        ]);
+      } finally {
+        if (stdin) Object.defineProperty(process, "stdin", stdin);
+        vi.unstubAllGlobals();
+      }
+
+      const otpBody = JSON.parse(fetchSpy.mock.calls[2][1].body as string);
+      expect(otpBody.variables).toEqual({
+        otp: "123456",
+        loginToken: "login-1",
+        origin: "https://crm.example.com",
+      });
+      const loginBody = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
+      expect(loginBody.variables.password).toBe("secret");
+      expect(ConfigService.prototype.saveWorkspace).toHaveBeenCalledWith("house", {
+        apiUrl: "https://crm.example.com",
+        session: expect.objectContaining({
+          email: "david@example.com",
+          accessToken: "access-1",
+          refreshToken: "refresh-1",
+        }),
+      });
+      expect(upsertEnvValue).not.toHaveBeenCalled();
     });
   });
 
