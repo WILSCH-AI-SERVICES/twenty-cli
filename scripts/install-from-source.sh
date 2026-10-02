@@ -55,3 +55,20 @@ chmod 0755 "$DEST"
 
 echo "--- installed. version reported by $DEST:"
 "$DEST" --version
+
+# On PATH, by name (#3236): a launcher only reachable by its full path is one no shell
+# resolves, so an operator's `twenty` from any directory would find nothing (#3119).
+BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
+mkdir -p "$BIN_DIR"
+if [ -e "$BIN_DIR/twenty" ] && [ ! -L "$BIN_DIR/twenty" ]; then
+  KEEP="$BIN_DIR/twenty.pre-fork.$(date -u +%Y%m%dT%H%M%SZ)"
+  echo "--- preserving what stood at $BIN_DIR/twenty -> $KEEP"
+  mv "$BIN_DIR/twenty" "$KEEP"
+fi
+ln -sfn "$DEST" "$BIN_DIR/twenty"
+echo "--- linked $BIN_DIR/twenty -> $DEST"
+LOGIN_PATH=$("${SHELL:-/bin/sh}" -lic 'printf %s "$PATH"' 2>/dev/null || true)
+case ":$LOGIN_PATH:" in
+  *":$BIN_DIR:"*) echo "--- a fresh login shell resolves: $("${SHELL:-/bin/sh}" -lic 'command -v twenty' 2>/dev/null)" ;;
+  *) echo "--- WARNING: $BIN_DIR is not on a fresh login shell's PATH; add it to your shell profile" >&2 ;;
+esac

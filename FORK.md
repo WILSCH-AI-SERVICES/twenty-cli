@@ -50,6 +50,13 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
   paged to completion and its count checked against the server's `totalCount`; a
   mismatch is a hard error, never a silently short export. The document names the
   entity kinds it carries and the kinds it omits.
+- `twenty auth login --email <you> --base-url <instance>` — signs in as the person:
+  their password, then their second factor when the workspace enforces one. The
+  session (a refresh token and a short-lived access token) is kept in
+  `~/.twenty/config.json` at mode 0600 and renews itself on every command, so `twenty`
+  reaches the instance from any directory with no `.env` and nothing exported — and
+  every write it makes names that person's workspace member, where an API key would
+  name only the key. An exported `TWENTY_API_TOKEN` still overrides it.
 - `twenty parity check` — drives the seven acts the house relies on against a live
   instance, each witnessed on a separate re-read from the store, and exits non-zero the
   moment any of them does not land. See `packages/twenty-sdk/src/cli/commands/parity/`.
@@ -58,8 +65,9 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
 
 `scripts/install-from-source.sh` builds the fork with pnpm and installs a launcher at
 the path the house's harnesses resolve the CLI from (default
-`~/twenty-cli-3021/dist/twenty`, override with `DEST=`). Whatever stood at that path
-before is preserved beside it, never deleted. The launcher execs
+`~/twenty-cli-3021/dist/twenty`, override with `DEST=`), and links it as `twenty` into
+`~/.local/bin` (override with `BIN_DIR=`) so a shell resolves it by name. Whatever stood
+at either path before is preserved beside it, never deleted. The launcher execs
 `packages/twenty-sdk/dist/cli/cli.js` under the host's `node`; nothing in it is copied
 from a release tarball.
 

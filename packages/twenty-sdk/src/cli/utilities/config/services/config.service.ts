@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs-extra";
 
 import { CliError } from "../../errors/cli-error";
+import { renewUserSession, sessionNeedsRenewal, type UserSession } from "./user-session";
 
 export const API_TOKEN_ENV_VAR = "TWENTY_API_TOKEN";
 export const LEGACY_API_TOKEN_ENV_VAR = "TWENTY_TOKEN";
@@ -11,6 +12,8 @@ export const LEGACY_API_TOKEN_ENV_VAR = "TWENTY_TOKEN";
 export interface WorkspaceConfig {
   apiUrl?: string;
   apiKey?: string;
+  /** A person's own signed-in session (`twenty auth login --email`); see user-session.ts. */
+  session?: UserSession;
   db?: WorkspaceDbConfig;
 }
 
@@ -49,7 +52,9 @@ export interface ResolvedConfig {
   apiUrl: string;
   apiKey: string;
   workspace?: string;
-  tokenSource?: "env" | "legacy-config" | "none";
+  tokenSource?: "env" | "legacy-config" | "session" | "none";
+  /** The person the session belongs to, when tokenSource is "session". */
+  sessionEmail?: string;
 }
 
 export interface ConfigOverrides {
@@ -98,6 +103,7 @@ export class ConfigService {
       apiKey: resolved.apiKey,
       workspace: resolved.workspace,
       tokenSource: resolved.tokenSource,
+      sessionEmail: resolved.sessionEmail,
     };
   }
 
@@ -119,8 +125,29 @@ export class ConfigService {
 
     const envApiKey = process.env[API_TOKEN_ENV_VAR] || process.env[LEGACY_API_TOKEN_ENV_VAR];
     const legacyApiKey = workspaceConfig.apiKey;
-    const apiKey = overrides?.apiKey ?? envApiKey ?? legacyApiKey ?? "";
-    const tokenSource = envApiKey ? "env" : legacyApiKey ? "legacy-config" : "none";
+
+    // A person's own session comes after an explicit token (override or environment) and
+    // before a stored API key: the session is what makes a write name its writer.
+    let sessionToken: string | undefined;
+    let sessionEmail: string | undefined;
+    if (!overrides?.apiKey && !envApiKey && workspaceConfig.session) {
+      let session = workspaceConfig.session;
+      if (sessionNeedsRenewal(session)) {
+        session = await renewUserSession(apiUrl, session);
+        await this.saveWorkspace(workspace, { session });
+      }
+      sessionToken = session.accessToken;
+      sessionEmail = session.email;
+    }
+
+    const apiKey = overrides?.apiKey ?? envApiKey ?? sessionToken ?? legacyApiKey ?? "";
+    const tokenSource = envApiKey
+      ? "env"
+      : sessionToken
+        ? "session"
+        : legacyApiKey
+          ? "legacy-config"
+          : "none";
 
     if (overrides?.requireAuth && !apiKey) {
       throw new CliError(
@@ -136,6 +163,7 @@ export class ConfigService {
       apiKey,
       workspace,
       tokenSource,
+      sessionEmail,
     };
   }
 
@@ -308,7 +336,12 @@ export class ConfigService {
   }
 
   private async saveConfigFile(config: TwentyConfigFile): Promise<void> {
-    await fs.outputFile(this.configPath, JSON.stringify(config, null, 2), "utf-8");
+    // The file can hold a person's session and refresh token: readable by its owner only.
+    await fs.outputFile(this.configPath, JSON.stringify(config, null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    await fs.chmod(this.configPath, 0o600);
   }
 
   private ensureWorkspaceExists(

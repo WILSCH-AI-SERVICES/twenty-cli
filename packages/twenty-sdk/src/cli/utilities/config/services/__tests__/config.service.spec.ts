@@ -111,6 +111,120 @@ describe("ConfigService", () => {
     });
   });
 
+  describe("resolveApiConfig with a person's session", () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("uses a fresh session's access token ahead of a stored API key, naming the person", async () => {
+      const config: TwentyConfigFile = {
+        defaultWorkspace: "house",
+        workspaces: {
+          house: {
+            apiUrl: "https://crm.example.com",
+            apiKey: "shared-key",
+            session: {
+              email: "david@example.com",
+              accessToken: "access-1",
+              accessTokenExpiresAt: future,
+              refreshToken: "refresh-1",
+            },
+          },
+        },
+      };
+      vi.mocked(fs.pathExists).mockResolvedValue(true as never);
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config) as never);
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const resolved = await new ConfigService().resolveApiConfig({ requireAuth: true });
+
+      expect(resolved).toMatchObject({
+        apiUrl: "https://crm.example.com",
+        apiKey: "access-1",
+        tokenSource: "session",
+        sessionEmail: "david@example.com",
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("renews an expiring session from its refresh token and persists the new tokens", async () => {
+      const config: TwentyConfigFile = {
+        defaultWorkspace: "house",
+        workspaces: {
+          house: {
+            apiUrl: "https://crm.example.com",
+            session: {
+              email: "david@example.com",
+              accessToken: "access-old",
+              accessTokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
+              refreshToken: "refresh-old",
+            },
+          },
+        },
+      };
+      vi.mocked(fs.pathExists).mockResolvedValue(true as never);
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config) as never);
+      vi.mocked(fs.outputFile).mockResolvedValue(undefined as never);
+      const fetchSpy = vi.fn().mockResolvedValue({
+        json: async () => ({
+          data: {
+            renewToken: {
+              tokens: {
+                accessOrWorkspaceAgnosticToken: { token: "access-new", expiresAt: future },
+                refreshToken: { token: "refresh-new", expiresAt: future },
+              },
+            },
+          },
+        }),
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const resolved = await new ConfigService().resolveApiConfig({ requireAuth: true });
+
+      expect(resolved.apiKey).toBe("access-new");
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://crm.example.com/metadata",
+        expect.objectContaining({ method: "POST" }),
+      );
+      const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
+      expect(body.variables).toEqual({ appToken: "refresh-old" });
+      const saved = JSON.parse(
+        vi.mocked(fs.outputFile).mock.calls[0][1] as string,
+      ) as TwentyConfigFile;
+      expect(saved.workspaces?.house?.session).toMatchObject({
+        accessToken: "access-new",
+        refreshToken: "refresh-new",
+      });
+    });
+
+    it("lets an exported token override the session", async () => {
+      process.env.TWENTY_API_TOKEN = "env-token";
+      const config: TwentyConfigFile = {
+        defaultWorkspace: "house",
+        workspaces: {
+          house: {
+            apiUrl: "https://crm.example.com",
+            session: {
+              email: "david@example.com",
+              accessToken: "access-1",
+              accessTokenExpiresAt: future,
+              refreshToken: "refresh-1",
+            },
+          },
+        },
+      };
+      vi.mocked(fs.pathExists).mockResolvedValue(true as never);
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(config) as never);
+
+      const resolved = await new ConfigService().resolveApiConfig({ requireAuth: true });
+
+      expect(resolved).toMatchObject({ apiKey: "env-token", tokenSource: "env" });
+    });
+  });
+
   describe("resolveApiConfig", () => {
     it("resolves apiUrl from explicit workspace config without requiring auth", async () => {
       const config: TwentyConfigFile = {
@@ -278,7 +392,7 @@ describe("ConfigService", () => {
       expect(fs.outputFile).toHaveBeenCalledWith(
         mockConfigPath,
         expect.stringContaining('"defaultWorkspace": "staging"'),
-        "utf-8",
+        { encoding: "utf-8", mode: 0o600 },
       );
     });
   });
@@ -294,7 +408,11 @@ describe("ConfigService", () => {
         apiKey: "key1",
       });
 
-      expect(fs.outputFile).toHaveBeenCalledWith(mockConfigPath, expect.any(String), "utf-8");
+      expect(fs.outputFile).toHaveBeenCalledWith(mockConfigPath, expect.any(String), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      expect(fs.chmod).toHaveBeenCalledWith(mockConfigPath, 0o600);
 
       const savedConfig = JSON.parse(
         vi.mocked(fs.outputFile).mock.calls[0][1] as string,
