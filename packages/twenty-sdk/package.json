@@ -38,7 +38,7 @@
     "test:e2e:live": "pnpm run build && TWENTY_LIVE_SMOKE=true vitest run -c vitest.e2e.config.ts src/cli/__tests__/e2e/helpers/live-config.spec.ts src/cli/__tests__/e2e/live-smoke.e2e.spec.ts"
   },
   "dependencies": {
-    "axios": "^1.18.0",
+    "axios": "^1.20.0",
     "axios-retry": "^4.1.0",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
