@@ -8,6 +8,7 @@ import { registerApplicationsCommand } from "./commands/applications/application
 import { registerApprovedAccessDomainsCommand } from "./commands/approved-access-domains/approved-access-domains.command";
 import { registerAuthCommand } from "./commands/auth/auth.command";
 import { registerCalendarChannelsCommand } from "./commands/calendar-channels/calendar-channels.command";
+import { registerCompanyCommand } from "./commands/company/company.command";
 import { registerConfigCommand } from "./commands/config/config.command";
 import { registerConnectedAccountsCommand } from "./commands/connected-accounts/connected-accounts.command";
 import { registerCoverageCommand } from "./commands/coverage/coverage.command";
@@ -83,11 +84,12 @@ export function buildProgram(): Command {
   registerMcpCommand(program);
   registerSkillsCommand(program);
   registerWorkflowsCommand(program);
-  // Fork (WILSCH-AI-SERVICES): the configuration read-back, the parity check, and saved
-  // views re-applied from a terminal.
+  // Fork (WILSCH-AI-SERVICES): the configuration read-back, the parity check, saved views
+  // re-applied from a terminal, and one read of a Company with its open Tasks.
   registerConfigCommand(program);
   registerParityCommand(program);
   registerViewsCommand(program);
+  registerCompanyCommand(program);
   applyCommandAliases(program);
 
   return program;

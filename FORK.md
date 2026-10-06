@@ -60,6 +60,12 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
 - `twenty parity check` — drives the seven acts the house relies on against a live
   instance, each witnessed on a separate re-read from the store, and exits non-zero the
   moment any of them does not land. See `packages/twenty-sdk/src/cli/commands/parity/`.
+- `twenty company read <name-or-id>` — one read of a Company: the Company, its People,
+  its Opportunities and every open Task that hangs on the Company or on any of its
+  Opportunities, each Task with its title, due date, assignee by name and the address its
+  note holds. A lead's Tasks hang on its Opportunity, so asking the Company for its related
+  records alone misses them; every Person, assignee and partner comes back by name, never
+  as an identifier to look up again.
 
 ## Building and installing from source
 
