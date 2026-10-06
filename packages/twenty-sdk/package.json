@@ -1,6 +1,6 @@
 {
   "name": "@wilsch-ai-services/twenty-cli",
-  "version": "0.1.15-wilsch.3",
+  "version": "0.1.15-wilsch.4",
   "private": false,
   "description": "CLI for Twenty CRM — the WILSCH-AI-SERVICES fork of salmonumbrella/twenty-cli",
   "keywords": [
@@ -44,6 +44,7 @@
     "dotenv": "^17.4.2",
     "form-data": "^4.0.6",
     "fs-extra": "^11.3.5",
+    "graphql": "^16.14.2",
     "jmespath": "^0.16.0",
     "papaparse": "^5.4.1",
     "pg": "^8.22.0"

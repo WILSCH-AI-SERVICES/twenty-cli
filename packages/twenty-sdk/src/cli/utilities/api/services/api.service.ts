@@ -7,6 +7,7 @@ import axios, {
 import axiosRetry from "axios-retry";
 
 import { ConfigService } from "../../config/services/config.service";
+import { guardWrite, type GuardedObject } from "../../house-rules/write-guard";
 import { redactSensitiveText, stringifyDebugPreview } from "../../shared/debug-redaction";
 
 export interface ApiServiceOptions {
@@ -78,6 +79,11 @@ export function createHttpClient(
       delete config.headers.Authorization;
     }
 
+    // Every route's write leaves through here, so the house's refusal sits here: a Task
+    // note outside its shape, a Task closed without its proof line, an Opportunity closed
+    // without why it stopped — refused before the request is sent (#3266).
+    await guardWrite(config, (object, id) => readStoredRecord(client, object, id));
+
     if (options.debug) {
       const url = redactSensitiveText(`${config.baseURL ?? ""}${config.url ?? ""}`);
       // eslint-disable-next-line no-console
@@ -118,6 +124,27 @@ export function createHttpClient(
   );
 
   return client;
+}
+
+const REST_PLURAL: Record<GuardedObject, string> = { task: "tasks", opportunity: "opportunities" };
+
+/** The record as stored, read fresh for the write guard; undefined when there is none. */
+async function readStoredRecord(
+  client: AxiosInstance,
+  object: GuardedObject,
+  id: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const response = await client.get<{ data?: Record<string, unknown> }>(
+      `/rest/${REST_PLURAL[object]}/${encodeURIComponent(id)}`,
+    );
+    const record = response.data?.data?.[object];
+    return record && typeof record === "object" ? (record as Record<string, unknown>) : undefined;
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response?.status;
+    if (status === 404 || status === 400) return undefined;
+    throw error;
+  }
 }
 
 export class ApiService {
