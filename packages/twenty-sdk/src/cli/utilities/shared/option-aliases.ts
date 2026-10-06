@@ -91,6 +91,9 @@ export const OPTION_ALIAS_OVERRIDES: Readonly<Record<string, readonly string[]>>
   warmup: ["wrm"],
   workspace: ["ws"],
   yes: ["yes"],
+  // #3266: tasks create — "title" and "rests-on-label" collide with ttl-hours and role-id.
+  "rests-on-label": ["rsl"],
+  title: ["tit"],
 });
 
 export function collectOptionAliasEntries(program: Command): OptionAliasEntry[] {

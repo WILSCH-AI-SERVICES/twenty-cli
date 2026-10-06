@@ -22,6 +22,7 @@ import { registerMarketplaceAppsCommand } from "./commands/marketplace-apps/mark
 import { registerMcpCommand } from "./commands/mcp/mcp.command";
 import { registerMessageChannelsCommand } from "./commands/message-channels/message-channels.command";
 import { registerOpenApiCommand } from "./commands/openapi/openapi.command";
+import { registerOpportunitiesCommand } from "./commands/opportunities/opportunities.command";
 import { registerParityCommand } from "./commands/parity/parity.command";
 import { registerPostgresProxyCommand } from "./commands/postgres-proxy/postgres-proxy.command";
 import { registerPublicDomainsCommand } from "./commands/public-domains/public-domains.command";
@@ -33,6 +34,7 @@ import { registerSchemaCommand } from "./commands/schema/schema.command";
 import { registerSearchCommand } from "./commands/search/search.command";
 import { registerServerlessCommand } from "./commands/serverless/serverless.command";
 import { registerSkillsCommand } from "./commands/skills/skills.command";
+import { registerTasksCommand } from "./commands/tasks/tasks.command";
 import { registerViewsCommand } from "./commands/views/views.command";
 import { registerWebhooksCommand } from "./commands/webhooks/webhooks.command";
 import { registerWorkflowsCommand } from "./commands/workflows/workflows.command";
@@ -85,11 +87,14 @@ export function buildProgram(): Command {
   registerSkillsCommand(program);
   registerWorkflowsCommand(program);
   // Fork (WILSCH-AI-SERVICES): the configuration read-back, the parity check, saved views
-  // re-applied from a terminal, and one read of a Company with its open Tasks.
+  // re-applied from a terminal, one read of a Company with its open Tasks, and Tasks and
+  // Opportunities written in the house's shape.
   registerConfigCommand(program);
   registerParityCommand(program);
   registerViewsCommand(program);
   registerCompanyCommand(program);
+  registerTasksCommand(program);
+  registerOpportunitiesCommand(program);
   applyCommandAliases(program);
 
   return program;
