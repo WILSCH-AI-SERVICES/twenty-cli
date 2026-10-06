@@ -107,6 +107,8 @@ function pathSegments(url: URL): string[] {
 }
 
 function truthy(value: unknown): boolean {
+  // `raw rest --param upsert=true` arrives as ["true"].
+  if (Array.isArray(value)) return value.some(truthy);
   return value === true || (typeof value === "string" && value.toLowerCase() === "true");
 }
 
@@ -172,7 +174,8 @@ function graphqlWrites(document: string, variables: unknown): IntendedWrite[] {
     // The instance parses with the same library and refuses a document this cannot parse.
     return [];
   }
-  const vars = isRecord(variables) ? variables : {};
+  const provided = isRecord(variables) ? variables : {};
+  let vars: Record<string, unknown> = provided;
   const writes: IntendedWrite[] = [];
   const fragments = new Map(
     ast.definitions
@@ -226,6 +229,14 @@ function graphqlWrites(document: string, variables: unknown): IntendedWrite[] {
   for (const definition of ast.definitions) {
     if (definition.kind !== Kind.OPERATION_DEFINITION) continue;
     if (definition.operation !== "mutation") continue;
+    // A variable left out of the request takes its declared default on the instance.
+    vars = { ...provided };
+    for (const variable of definition.variableDefinitions ?? []) {
+      const name = variable.variable.name.value;
+      if (!(name in vars) && variable.defaultValue) {
+        vars[name] = valueFromASTUntyped(variable.defaultValue);
+      }
+    }
     visit(definition.selectionSet.selections, new Set());
   }
   return writes;

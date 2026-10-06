@@ -150,6 +150,32 @@ describe("every route's write is read for what it writes", () => {
     ).toEqual([]);
   });
 
+  it("GraphQL: a variable left out takes its declared default", () => {
+    expect(
+      intendedWrites({
+        method: "post",
+        baseURL: BASE,
+        url: "/graphql",
+        data: {
+          query:
+            'mutation ($d: TaskUpdateInput = {status: DONE}) { updateTask(id: "t1", data: $d) { id } }',
+        },
+      }),
+    ).toMatchObject([{ kind: "update", id: "t1", data: { status: "DONE" } }]);
+  });
+
+  it("REST: an upsert flag passed as a repeated query param", () => {
+    expect(
+      intendedWrites({
+        method: "post",
+        baseURL: BASE,
+        url: "/rest/tasks",
+        params: { upsert: ["true"] },
+        data: {},
+      }),
+    ).toMatchObject([{ kind: "create", upsert: true }]);
+  });
+
   it("MCP: execute_tool and direct tool calls", () => {
     expect(
       intendedWrites({
