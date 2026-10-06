@@ -2,9 +2,10 @@
 
 > **This is the WILSCH-AI-SERVICES fork** of [`salmonumbrella/twenty-cli`](https://github.com/salmonumbrella/twenty-cli).
 > [`FORK.md`](./FORK.md) states where it was cut from, its version line, and what it adds:
-> `twenty config export` (the workspace configuration read back out as text) and
+> `twenty config export` (the workspace configuration read back out as text),
 > `twenty parity check` (the seven acts the house relies on, driven against a live instance
-> and witnessed on re-read). Build and install from source with
+> and witnessed on re-read) and `twenty company read` (a Company with its People and open
+> Tasks spelled out, in one call). Build and install from source with
 > `scripts/install-from-source.sh`. The rest of this README is the upstream's.
 
 [![CI](https://github.com/salmonumbrella/twenty-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/salmonumbrella/twenty-cli/actions/workflows/ci.yml)

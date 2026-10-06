@@ -60,6 +60,20 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
 - `twenty parity check` — drives the seven acts the house relies on against a live
   instance, each witnessed on a separate re-read from the store, and exits non-zero the
   moment any of them does not land. See `packages/twenty-sdk/src/cli/commands/parity/`.
+- `twenty company read <name-or-id>` — one read of a Company: the Company, its People,
+  its Opportunities and every open Task that hangs on the Company or on any of its
+  Opportunities, each Task with its title, due date, assignee by name and the address its
+  note holds. A lead's Tasks hang on its Opportunity, so asking the Company for its related
+  records alone misses them; every Person, assignee and partner comes back by name, never
+  as an identifier to look up again.
+- `twenty tasks create` / `twenty tasks close` / `twenty opportunities close` — Tasks and
+  Opportunities written in the house's shape (DaveX2001/deliverable-tracking#3266): an open
+  Task's note holds the address it rests on and the issue it sits on, a closed one ends in
+  `Closed DD.MM · proof: [what it is](address)`, a closed Opportunity carries `whyStopped`.
+  The same rules hold on every write the CLI sends — record commands, batch and upsert
+  forms, `graphql`, `raw rest`, `raw graphql`, `mcp exec` — through a guard in the HTTP
+  transport (`packages/twenty-sdk/src/cli/utilities/house-rules/`) that refuses the write
+  before it leaves the machine and names what is missing.
 
 ## Building and installing from source
 

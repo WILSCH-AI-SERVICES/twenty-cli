@@ -39,6 +39,7 @@ const APPROVED_STRICT_URL_HOSTS = new Set([
   "api.example.com",
   "staging.twenty.com",
   "example.com",
+  "github.com",
   "localhost",
   "127.0.0.1",
   "::1",

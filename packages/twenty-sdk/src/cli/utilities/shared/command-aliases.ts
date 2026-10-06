@@ -107,6 +107,7 @@ export const COMMON_COMMAND_ALIASES: Readonly<Record<string, readonly string[]>>
   verify: ["vf"],
   "view-filters": ["vfl"],
   "message-channel-message-associations": ["mca"],
+  "agent-chat-thread-targets": ["ctt"],
 });
 
 export function applyCommandAliases(program: Command): void {

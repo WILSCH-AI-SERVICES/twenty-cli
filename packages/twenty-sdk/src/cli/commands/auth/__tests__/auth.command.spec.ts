@@ -264,7 +264,7 @@ describe("auth commands", () => {
           "--otp",
           "123456",
           "--base-url",
-          "https://crm.example.com",
+          "https://crm.acme.com",
           "--workspace",
           "house",
         ]);
@@ -277,12 +277,12 @@ describe("auth commands", () => {
       expect(otpBody.variables).toEqual({
         otp: "123456",
         loginToken: "login-1",
-        origin: "https://crm.example.com",
+        origin: "https://crm.acme.com",
       });
       const loginBody = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
       expect(loginBody.variables.password).toBe("secret");
       expect(ConfigService.prototype.saveWorkspace).toHaveBeenCalledWith("house", {
-        apiUrl: "https://crm.example.com",
+        apiUrl: "https://crm.acme.com",
         session: expect.objectContaining({
           email: "david@example.com",
           accessToken: "access-1",
