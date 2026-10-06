@@ -35,7 +35,7 @@ function source(overrides: Partial<CompanyReadSource> = {}): CompanyReadSource {
         status: "TODO",
         dueAt: "2026-10-09T08:00:00.000Z",
         assigneeId: MARIUS,
-        bodyV2: { markdown: "Asked: https://mail.google.com/mail/u/0/#all/abc · DT#1" },
+        bodyV2: { markdown: "Asked: https://example.com/mail/abc · DT#1" },
       },
       {
         id: "t-co",
@@ -73,7 +73,7 @@ describe("assembleCompanyRead", () => {
       title: "Thomas owes the order",
       dueAt: "2026-10-09T08:00:00.000Z",
       assignee: { id: MARIUS, name: "Marius Wilsch", email: "m@w.example" },
-      noteAddress: "https://mail.google.com/mail/u/0/#all/abc",
+      noteAddress: "https://example.com/mail/abc",
       on: [{ object: "opportunity", id: OPP, name: "Angebot 1" }],
     });
     expect(task).not.toHaveProperty("assigneeId");
