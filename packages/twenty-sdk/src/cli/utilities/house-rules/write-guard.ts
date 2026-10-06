@@ -12,6 +12,8 @@
  *   - a Task whose note is outside the one shape (`task-note.ts`), including a Task
  *     written with no note at all;
  *   - a Task done whose note does not end in its proof line, dated the day of the close;
+ *   - a Task already done whose note is rewritten, or which is moved off DONE with its
+ *     proof line still standing (#3276) — no closed Task loses its proof;
  *   - an Opportunity at CLOSED_WON or CLOSED_LOST whose `whyStopped` carries no address,
  *     including one created already closed.
  *
@@ -334,15 +336,24 @@ function judgeTask(
   const done = statusAfter === "DONE";
   const wasDone = stored?.status === "DONE";
 
+  const storedMarkdown = stored && isRecord(stored.bodyV2) ? stored.bodyV2.markdown : undefined;
+
   let markdown: unknown;
   if ("bodyV2" in data || !stored) {
     const note = noteOf(data.bodyV2);
     if (note.problem) return [note.problem];
     markdown = note.markdown;
+    // A done Task's note ends in its proof; rewriting it would lose the proof (#3276).
+    if (wasDone && markdown !== storedMarkdown) {
+      return [
+        "the Task is done — its note ends in its proof line, and a rewrite would lose it; a done Task's note is not rewritten",
+      ];
+    }
   } else {
-    // The note is not written; it is judged only when this write closes the Task.
-    if (!done) return [];
-    markdown = isRecord(stored.bodyV2) ? stored.bodyV2.markdown : undefined;
+    // The note is not written; it is judged when this write closes the Task, or moves a
+    // done Task off DONE (its proof line would then stand on an open Task).
+    if (!done && !wasDone) return [];
+    markdown = storedMarkdown;
   }
 
   return checkTaskNote(markdown, {

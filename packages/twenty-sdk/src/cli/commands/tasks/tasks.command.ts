@@ -26,6 +26,12 @@ interface TaskCreateOptions {
   assignee?: string;
 }
 
+interface TaskNoteOptions {
+  restsOn?: string;
+  restsOnLabel?: string;
+  issue?: string;
+}
+
 interface TaskCloseOptions {
   proof?: string;
   proofLabel?: string;
@@ -41,11 +47,37 @@ function refuse(missing: string[]): never {
 }
 
 /**
- * `twenty tasks create` / `twenty tasks close` — the Task note in one shape, written by
- * the tool rather than typed out by the operator (#3266). `create` emits an open note from
- * the address the Task rests on and the issue it sits on; `close` appends the proof line,
- * dated today, and sets the Task done. Both re-read the Task from the instance after the
- * write and print what is stored. Whatever route a write takes, the transport's guard
+ * The open note's parts as the operator passed them: what is missing or malformed is
+ * pushed onto `missing`, and the note is returned only when nothing is.
+ */
+function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | undefined {
+  const before = missing.length;
+  if (!options.restsOn) {
+    missing.push(
+      "the note is missing the address of the artifact the Task rests on — pass --rests-on <address of the mail or recording>",
+    );
+  } else if (!isAddress(options.restsOn)) {
+    missing.push(`--rests-on "${options.restsOn}" is not an http(s) address`);
+  }
+  const label = labelProblem(options.restsOnLabel, "the artifact the Task rests on");
+  if (label) missing.push(`${label} — pass --rests-on-label <what it is>`);
+  let issue: IssueRef | undefined;
+  if (options.issue !== undefined) {
+    issue = parseIssueRef(options.issue);
+    if (!issue) missing.push(`--issue "${options.issue}" is not owner/repo#N, #N or an issue URL`);
+  }
+  if (missing.length > before) return undefined;
+  return emitOpenNote({ restsOnLabel: options.restsOnLabel!, restsOnUrl: options.restsOn!, issue });
+}
+
+/**
+ * `twenty tasks create` / `note` / `close` — the Task note in one shape, written by the
+ * tool rather than typed out by the operator (#3266, #3276). `create` emits an open note
+ * from the address the Task rests on and the issue it sits on; `note` rewrites an open
+ * Task's note into that shape, replacing whatever it held, and refuses a Task already
+ * done so no closed Task loses its proof line; `close` appends the proof line, dated
+ * today, and sets the Task done. Each re-reads the Task from the instance after the write
+ * and prints what is stored. Whatever route a write takes, the transport's guard
  * (`utilities/house-rules/write-guard.ts`) refuses a note outside this shape.
  */
 export function registerTasksCommand(program: Command): void {
@@ -73,35 +105,16 @@ export function registerTasksCommand(program: Command): void {
 
     const missing: string[] = [];
     if (!options.title?.trim()) missing.push("the Task has no title — pass --title, who owes what");
-    if (!options.restsOn) {
-      missing.push(
-        "the note is missing the address of the artifact the Task rests on — pass --rests-on <address of the mail or recording>",
-      );
-    } else if (!isAddress(options.restsOn)) {
-      missing.push(`--rests-on "${options.restsOn}" is not an http(s) address`);
-    }
-    const label = labelProblem(options.restsOnLabel, "the artifact the Task rests on");
-    if (label) missing.push(`${label} — pass --rests-on-label <what it is>`);
-    let issue: IssueRef | undefined;
-    if (options.issue !== undefined) {
-      issue = parseIssueRef(options.issue);
-      if (!issue)
-        missing.push(`--issue "${options.issue}" is not owner/repo#N, #N or an issue URL`);
-    }
+    const markdown = openNoteFrom(options, missing);
     if (!options.company === !options.opportunity) {
       missing.push("a Task stands on one record — pass exactly one of --company or --opportunity");
     }
     if (missing.length > 0) refuse(missing);
 
-    const markdown = emitOpenNote({
-      restsOnLabel: options.restsOnLabel!,
-      restsOnUrl: options.restsOn!,
-      issue,
-    });
     const data: Record<string, unknown> = {
       title: options.title!.trim(),
       status: "TODO",
-      bodyV2: { markdown },
+      bodyV2: { markdown: markdown! },
     };
     if (options.due) data.dueAt = options.due;
     if (options.assignee) data.assigneeId = options.assignee;
@@ -115,6 +128,37 @@ export function registerTasksCommand(program: Command): void {
     });
 
     await renderStored(services, created.id, globalOptions);
+  });
+
+  const note = tasks
+    .command("note")
+    .description(
+      "Rewrite an open Task's note into the one shape: Rests on: [what it is](address), and the issue",
+    )
+    .argument("<id>", "The Task's id")
+    .option("--rests-on <address>", "Address of the mail or recording the Task rests on")
+    .option("--rests-on-label <text>", "What that artifact is, in a few words")
+    .option("--issue <ref>", "The GitHub issue the work sits on: owner/repo#N, #N or its URL");
+  applyGlobalOptions(note);
+
+  note.action(async (id: string, _options: unknown, command: Command) => {
+    const { globalOptions, services } = await createCommandContext(command);
+    const options = command.opts() as TaskNoteOptions;
+
+    const missing: string[] = [];
+    const markdown = openNoteFrom(options, missing);
+    if (missing.length > 0) refuse([...missing, `Task ${id}'s note is unchanged`]);
+
+    const stored = await readTask(services, id);
+    if (stored.status === "DONE") {
+      refuse([
+        `Task ${id} is done — its note ends in its proof line, and a rewrite would lose it; the note is unchanged`,
+      ]);
+    }
+
+    await services.records.update("tasks", id, { bodyV2: { markdown: markdown! } });
+
+    await renderStored(services, id, globalOptions);
   });
 
   const close = tasks
