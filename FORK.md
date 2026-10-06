@@ -66,6 +66,14 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
   note holds. A lead's Tasks hang on its Opportunity, so asking the Company for its related
   records alone misses them; every Person, assignee and partner comes back by name, never
   as an identifier to look up again.
+- `twenty tasks create` / `twenty tasks close` / `twenty opportunities close` — Tasks and
+  Opportunities written in the house's shape (DaveX2001/deliverable-tracking#3266): an open
+  Task's note holds the address it rests on and the issue it sits on, a closed one ends in
+  `Closed DD.MM · proof: [what it is](address)`, a closed Opportunity carries `whyStopped`.
+  The same rules hold on every write the CLI sends — record commands, batch and upsert
+  forms, `graphql`, `raw rest`, `raw graphql`, `mcp exec` — through a guard in the HTTP
+  transport (`packages/twenty-sdk/src/cli/utilities/house-rules/`) that refuses the write
+  before it leaves the machine and names what is missing.
 
 ## Building and installing from source
 
