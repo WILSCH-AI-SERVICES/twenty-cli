@@ -10,14 +10,14 @@ import {
 } from "../task-note";
 import { guardWrite, intendedWrites, type StoredReader } from "../write-guard";
 
-const MAIL = "https://mail.google.com/mail/u/0/#all/1a10c1e0d880919a";
+const MAIL = "https://example.com/mail/1a10c1e0d880919a";
 const OPEN = emitOpenNote({
   restsOnLabel: "Svend, Ticket #20049, 05.10",
   restsOnUrl: MAIL,
   issue: parseIssueRef("#2296"),
 });
 const CLOSED = appendClosingLine(OPEN, closingLine("Gregor, 02.10", MAIL));
-const BASE = "https://crm.wilsch-ai.com";
+const BASE = "https://crm.acme.com";
 
 const none: StoredReader = async () => undefined;
 const storedTask =

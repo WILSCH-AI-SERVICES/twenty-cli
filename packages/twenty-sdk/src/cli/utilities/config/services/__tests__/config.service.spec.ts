@@ -123,7 +123,7 @@ describe("ConfigService", () => {
         defaultWorkspace: "house",
         workspaces: {
           house: {
-            apiUrl: "https://crm.example.com",
+            apiUrl: "https://crm.acme.com",
             apiKey: "shared-key",
             session: {
               email: "david@example.com",
@@ -142,7 +142,7 @@ describe("ConfigService", () => {
       const resolved = await new ConfigService().resolveApiConfig({ requireAuth: true });
 
       expect(resolved).toMatchObject({
-        apiUrl: "https://crm.example.com",
+        apiUrl: "https://crm.acme.com",
         apiKey: "access-1",
         tokenSource: "session",
         sessionEmail: "david@example.com",
@@ -155,7 +155,7 @@ describe("ConfigService", () => {
         defaultWorkspace: "house",
         workspaces: {
           house: {
-            apiUrl: "https://crm.example.com",
+            apiUrl: "https://crm.acme.com",
             session: {
               email: "david@example.com",
               accessToken: "access-old",
@@ -186,7 +186,7 @@ describe("ConfigService", () => {
 
       expect(resolved.apiKey).toBe("access-new");
       expect(fetchSpy).toHaveBeenCalledWith(
-        "https://crm.example.com/metadata",
+        "https://crm.acme.com/metadata",
         expect.objectContaining({ method: "POST" }),
       );
       const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
@@ -206,7 +206,7 @@ describe("ConfigService", () => {
         defaultWorkspace: "house",
         workspaces: {
           house: {
-            apiUrl: "https://crm.example.com",
+            apiUrl: "https://crm.acme.com",
             session: {
               email: "david@example.com",
               accessToken: "access-1",
