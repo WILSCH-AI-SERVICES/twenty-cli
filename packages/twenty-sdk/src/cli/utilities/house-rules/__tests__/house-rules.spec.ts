@@ -241,6 +241,40 @@ describe("the guard", () => {
     );
   });
 
+  it("lets an open Task's note be rewritten into the shape, and refuses one outside it", async () => {
+    await expect(
+      guardWrite(patch({ bodyV2: { markdown: OPEN } }), storedTask("TODO", `${MAIL} · DT#2296`)),
+    ).resolves.toBeUndefined();
+    await expect(
+      guardWrite(patch({ bodyV2: { markdown: MAIL } }), storedTask("TODO", OPEN)),
+    ).rejects.toThrow(/does not open with the address/);
+    await expect(
+      guardWrite(
+        patch({ bodyV2: { markdown: `Rests on: [](${MAIL})` } }),
+        storedTask("TODO", OPEN),
+      ),
+    ).rejects.toThrow(/Refused/);
+  });
+
+  it("refuses rewriting a done Task's note, and moving it off DONE with its proof line", async () => {
+    const otherClose = appendClosingLine(OPEN, closingLine("someone else", `${MAIL}/2`));
+    await expect(
+      guardWrite(patch({ bodyV2: { markdown: OPEN } }), storedTask("DONE", CLOSED)),
+    ).rejects.toThrow(/is done/);
+    await expect(
+      guardWrite(patch({ bodyV2: { markdown: otherClose } }), storedTask("DONE", CLOSED)),
+    ).rejects.toThrow(/is done/);
+    await expect(
+      guardWrite(patch({ status: "TODO", bodyV2: { markdown: OPEN } }), storedTask("DONE", CLOSED)),
+    ).rejects.toThrow(/is done/);
+    await expect(guardWrite(patch({ status: "TODO" }), storedTask("DONE", CLOSED))).rejects.toThrow(
+      /ends in a proof line but the Task is not done/,
+    );
+    await expect(
+      guardWrite(patch({ bodyV2: { markdown: CLOSED } }), storedTask("DONE", CLOSED)),
+    ).resolves.toBeUndefined();
+  });
+
   it("refuses a filter-wide close and a merge, and lets a dry-run merge through", async () => {
     await expect(guardWrite(patch({ status: "DONE" }, "/rest/tasks"), none)).rejects.toThrow(
       /filter-wide/,
