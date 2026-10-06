@@ -75,7 +75,10 @@ describe("translateFilter", () => {
       translateFilter({ fieldName: "d", fieldType: "DATE", operand: "IS_IN_PAST", value: "" }, ctx),
     ).toBe("d[lt]:2026-10-02");
     expect(
-      translateFilter({ fieldName: "d", fieldType: "DATE", operand: "IS_IN_FUTURE", value: "" }, ctx),
+      translateFilter(
+        { fieldName: "d", fieldType: "DATE", operand: "IS_IN_FUTURE", value: "" },
+        ctx,
+      ),
     ).toBe("d[gte]:2026-10-03");
   });
 
