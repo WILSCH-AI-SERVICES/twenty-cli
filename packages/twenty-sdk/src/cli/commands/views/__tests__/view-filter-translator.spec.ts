@@ -68,6 +68,17 @@ describe("translateFilter", () => {
     ).toBe("d[eq]:2026-10-02");
   });
 
+  it("compares a DATE in the past or future by the calendar day in the view's zone, not UTC's", () => {
+    // 2026-10-02 in Berlin begins at 2026-10-01T22:00Z: a date before today is before 2026-10-02,
+    // and one in the future is from 2026-10-03 (#3268 — yesterday was read as today).
+    expect(
+      translateFilter({ fieldName: "d", fieldType: "DATE", operand: "IS_IN_PAST", value: "" }, ctx),
+    ).toBe("d[lt]:2026-10-02");
+    expect(
+      translateFilter({ fieldName: "d", fieldType: "DATE", operand: "IS_IN_FUTURE", value: "" }, ctx),
+    ).toBe("d[gte]:2026-10-03");
+  });
+
   it("refuses an operand it cannot express rather than widening the result", () => {
     expect(() =>
       translateFilter(

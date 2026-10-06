@@ -66,8 +66,15 @@ function offsetMs(at: Date, timeZone: string): number {
   return sign * (Number(m[2]) * 60 + Number(m[3] ?? 0)) * 60_000;
 }
 
-function dateOperand(f: ViewFilterInput, at: Date): string {
-  return f.fieldType === "DATE" ? at.toISOString().slice(0, 10) : at.toISOString();
+/**
+ * A DATE compares as the calendar day `at` falls on in `timeZone` — not the UTC day: the start of
+ * a Berlin day is the previous evening in UTC, so slicing its ISO string named yesterday
+ * (DaveX2001/deliverable-tracking#3268: Gone quiet missed a Company quiet from yesterday).
+ */
+function dateOperand(f: ViewFilterInput, at: Date, timeZone: string): string {
+  return f.fieldType === "DATE"
+    ? new Intl.DateTimeFormat("en-CA", { timeZone }).format(at)
+    : at.toISOString();
 }
 
 function selectValues(f: ViewFilterInput): string[] {
@@ -106,11 +113,11 @@ export function translateFilter(f: ViewFilterInput, ctx: TranslateContext): stri
     switch (f.operand) {
       case "IS_IN_PAST":
         return f.fieldType === "DATE"
-          ? `${n}[lt]:${dateOperand(f, startOfDayIn(ctx.now, ctx.timeZone))}`
+          ? `${n}[lt]:${dateOperand(f, startOfDayIn(ctx.now, ctx.timeZone), ctx.timeZone)}`
           : `${n}[lt]:${ctx.now.toISOString()}`;
       case "IS_IN_FUTURE":
         return f.fieldType === "DATE"
-          ? `${n}[gte]:${dateOperand(f, startOfDayIn(ctx.now, ctx.timeZone, 1))}`
+          ? `${n}[gte]:${dateOperand(f, startOfDayIn(ctx.now, ctx.timeZone, 1), ctx.timeZone)}`
           : `${n}[gt]:${ctx.now.toISOString()}`;
       case "IS_TODAY": {
         if (f.fieldType === "DATE") {
