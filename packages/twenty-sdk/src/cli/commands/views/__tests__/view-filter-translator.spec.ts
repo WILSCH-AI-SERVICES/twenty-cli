@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 
 import { CliError } from "../../../utilities/errors/cli-error";
-import { startOfDayIn, translateFilter, translateView } from "../view-filter-translator";
+import {
+  startOfDayIn,
+  translateFilter,
+  translateSorts,
+  translateView,
+} from "../view-filter-translator";
 
 // 2026-10-02 17:30 UTC is 19:30 in Berlin (CEST, UTC+2).
 const ctx = { now: new Date("2026-10-02T17:30:00.000Z"), timeZone: "Europe/Berlin" };
@@ -136,5 +141,54 @@ describe("translateView", () => {
 
   it("is empty for a view with no filters", () => {
     expect(translateView([], [], ctx)).toBe("");
+  });
+});
+
+describe("translateSorts", () => {
+  it("every sort in its order, nulls last both ways, position last (#3303: the Pipeline)", () => {
+    expect(
+      translateSorts(
+        [
+          { field: { name: "stage", type: "SELECT" }, direction: "ASC" },
+          { field: { name: "amount", type: "CURRENCY" }, direction: "DESC" },
+          {
+            field: { name: "owner", type: "RELATION" },
+            direction: "ASC",
+            relationLabel: { name: "name", type: "FULL_NAME" },
+          },
+        ],
+        true,
+      ),
+    ).toBe(
+      "stage[AscNullsLast],amount.amountMicros[DescNullsLast],owner.name.firstName[AscNullsLast],owner.name.lastName[AscNullsLast],position[AscNullsFirst]",
+    );
+  });
+
+  it("a relation whose target has no label identifier sorts by its foreign key", () => {
+    expect(
+      translateSorts([{ field: { name: "company", type: "RELATION" }, direction: "DESC" }], false),
+    ).toBe("companyId[DescNullsLast]");
+  });
+
+  it("a full name honours its requested sub-field; no sorts and no position is empty", () => {
+    expect(
+      translateSorts(
+        [
+          {
+            field: { name: "name", type: "FULL_NAME" },
+            direction: "ASC",
+            subFieldName: "lastName",
+          },
+        ],
+        false,
+      ),
+    ).toBe("name.lastName[AscNullsLast],name.firstName[AscNullsLast]");
+    expect(translateSorts([], false)).toBe("");
+  });
+
+  it("refuses an address sort rather than guess its sub-field", () => {
+    expect(() =>
+      translateSorts([{ field: { name: "address", type: "ADDRESS" }, direction: "ASC" }], false),
+    ).toThrow(CliError);
   });
 });

@@ -274,6 +274,22 @@ export class MetadataService {
     await this.api.delete(`/rest/metadata/fields/${id}`);
   }
 
+  /**
+   * The object a relation field points at. The REST metadata leaves `relation` empty on a
+   * field, so the metadata GraphQL endpoint answers it; undefined for a field with no target.
+   */
+  async getRelationTargetObjectId(fieldId: string): Promise<string | undefined> {
+    const response = await this.postMetadataGraphql<{
+      relation?: { targetObjectMetadata?: { id?: string } | null } | null;
+    }>(
+      `query RelationTarget($id: UUID!) { field(id: $id) { relation { targetObjectMetadata { id } } } }`,
+      {
+        id: fieldId,
+      },
+    );
+    return response.data?.field?.relation?.targetObjectMetadata?.id ?? undefined;
+  }
+
   async listViews(params?: Record<string, string | undefined>): Promise<MetadataResource[]> {
     return this.listResource("/rest/metadata/views", "views", params);
   }

@@ -175,3 +175,71 @@ export function translateView(
   // Top level: filters with no group and root groups are ANDed, as the view applies them.
   return combine("AND", render(null));
 }
+
+export interface SortFieldInput {
+  name: string;
+  type: string;
+}
+
+export interface ViewSortInput {
+  field: SortFieldInput;
+  direction: string;
+  subFieldName?: string | null;
+  /** For a RELATION: the label identifier of the object it points at; absent → its foreign key. */
+  relationLabel?: SortFieldInput | null;
+}
+
+const FULL_NAME_SUBFIELDS = new Set(["firstName", "lastName"]);
+
+/** One field's sort paths, as Twenty's browser orders it (twenty-front getOrderByForFieldMetadataType). */
+function sortPaths(field: SortFieldInput, subFieldName?: string | null): string[] {
+  switch (field.type) {
+    case "FULL_NAME": {
+      const primary =
+        subFieldName && FULL_NAME_SUBFIELDS.has(subFieldName) ? subFieldName : "firstName";
+      const secondary = primary === "firstName" ? "lastName" : "firstName";
+      return [`${field.name}.${primary}`, `${field.name}.${secondary}`];
+    }
+    case "CURRENCY":
+      return [`${field.name}.amountMicros`];
+    case "ACTOR":
+      return [`${field.name}.name`];
+    case "LINKS":
+      return [`${field.name}.primaryLinkUrl`];
+    case "EMAILS":
+      return [`${field.name}.primaryEmail`];
+    case "PHONES":
+      return [`${field.name}.primaryPhoneNumber`];
+    case "ADDRESS":
+      throw new CliError(
+        `A sort on the address ${field.name} is not one this CLI re-applies`,
+        "INVALID_ARGUMENTS",
+      );
+    default:
+      return [field.name];
+  }
+}
+
+/**
+ * A saved view's sorts as the REST `order_by` the browser's own query carries
+ * (twenty-front turnSortsIntoOrderBy, twenty v2.44.0): every sort in its order, nulls last in
+ * both directions, a relation by the label identifier of the record it points at, and the
+ * record's position as the last tie-break. Only the first sort was applied before, so a view
+ * sorted by stage, then amount, then owner came back in stage order alone
+ * (DaveX2001/deliverable-tracking#3303 AC2).
+ */
+export function translateSorts(sorts: ViewSortInput[], hasPosition: boolean): string {
+  const entries = sorts.flatMap((s) => {
+    const direction =
+      String(s.direction).toUpperCase() === "DESC" ? "DescNullsLast" : "AscNullsLast";
+    const paths =
+      s.field.type === "RELATION"
+        ? s.relationLabel
+          ? sortPaths(s.relationLabel).map((p) => `${s.field.name}.${p}`)
+          : [`${s.field.name}Id`]
+        : sortPaths(s.field, s.subFieldName);
+    return paths.map((p) => `${p}[${direction}]`);
+  });
+  if (hasPosition) entries.push("position[AscNullsFirst]");
+  return entries.join(",");
+}
