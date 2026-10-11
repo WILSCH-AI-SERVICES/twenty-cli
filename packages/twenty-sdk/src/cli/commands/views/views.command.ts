@@ -4,9 +4,12 @@ import { CliError } from "../../utilities/errors/cli-error";
 import { createCommandContext } from "../../utilities/shared/context";
 import { applyGlobalOptions } from "../../utilities/shared/global-options";
 import {
+  translateSorts,
   translateView,
+  type SortFieldInput,
   type ViewFilterGroupInput,
   type ViewFilterInput,
+  type ViewSortInput,
 } from "./view-filter-translator";
 
 interface ViewsRunOptions {
@@ -22,8 +25,9 @@ interface Resource {
 
 /**
  * `twenty views run <name>` — re-apply a saved view from a terminal: read the view's
- * filters, filter groups and sort from the metadata store, translate them into the REST
- * filter, and list every record it selects (#3236 AC3).
+ * filters, filter groups and sorts from the metadata store, translate them into the REST
+ * filter and order, and list every record it selects, in the order the browser shows them
+ * (#3236 AC3; every sort, not only the first, #3303).
  */
 export function registerViewsCommand(program: Command): void {
   const views = program.command("views").description("Saved views, re-applied from a terminal");
@@ -95,22 +99,54 @@ export function registerViewsCommand(program: Command): void {
     const groups = ((await services.metadata.listViewFilterGroups()) as Resource[]).filter(
       ofView,
     ) as unknown as ViewFilterGroupInput[];
-    const sorts = ((await services.metadata.listViewSorts()) as Resource[]).filter(ofView);
+    const sortRows = ((await services.metadata.listViewSorts()) as Resource[])
+      .filter(ofView)
+      // A sort carries no position when made through the API; then the order it was made in holds.
+      .sort(
+        (a, b) =>
+          Number(a.position ?? 0) - Number(b.position ?? 0) ||
+          String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")),
+      );
+    const sorts: ViewSortInput[] = [];
+    for (const s of sortRows) {
+      const field = fieldById.get(s.fieldMetadataId as string);
+      if (!field) continue; // the browser drops a sort on a field it cannot find, and so does this
+      const input: ViewSortInput = {
+        field: { name: field.name as string, type: field.type as string },
+        direction: s.direction as string,
+        subFieldName: (s.subFieldName as string | null | undefined) ?? null,
+      };
+      if (field.type === "RELATION") input.relationLabel = await relationLabel(field.id);
+      sorts.push(input);
+    }
+    // A relation sorts by the label identifier of the record it points at, as the browser does.
+    async function relationLabel(fieldId: string): Promise<SortFieldInput | null> {
+      const targetId = await services.metadata.getRelationTargetObjectId(fieldId);
+      if (!targetId) return null;
+      const target = (await services.metadata.getObject(targetId)) as unknown as {
+        labelIdentifierFieldMetadataId?: string;
+        fields?: Resource[];
+      };
+      const label = (target.fields ?? []).find(
+        (f) => f.id === target.labelIdentifierFieldMetadataId,
+      );
+      return label ? { name: label.name as string, type: label.type as string } : null;
+    }
 
     const filter = translateView(filters, groups, { now: new Date(), timeZone: options.timeZone });
-    const sort = sorts[0]
-      ? (fieldById.get(sorts[0].fieldMetadataId as string)?.name as string)
-      : undefined;
-    const order = sorts[0] ? String(sorts[0].direction).toLowerCase() : undefined;
+    const orderBy = translateSorts(
+      sorts,
+      (full.fields ?? []).some((f) => f.name === "position"),
+    );
     if (options.explain) {
       process.stderr.write(
-        `view "${name}" on ${full.namePlural}\nfilter: ${filter || "(none)"}\nsort: ${sort ?? "(none)"} ${order ?? ""}\n`,
+        `view "${name}" on ${full.namePlural}\nfilter: ${filter || "(none)"}\norder_by: ${orderBy || "(none)"}\n`,
       );
     }
 
     const { data } = await services.records.listAll(full.namePlural, {
       ...(filter ? { filter } : {}),
-      ...(sort ? { sort, order } : {}),
+      ...(orderBy ? { params: { order_by: [orderBy] } } : {}),
     });
     await services.output.render(data, {
       format: globalOptions.output,
