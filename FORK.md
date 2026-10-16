@@ -110,3 +110,11 @@ against the house's instance before cutting the next `0.1.15-wilsch.N` tag.
 The upstream's `.github/workflows` are kept as-is except that the release workflow
 publishes nothing outside this repository (no Homebrew tap, no npm) — see the
 workflow files for what was disabled and why.
+
+`upstream-drift.yml` is kept in the tree but disabled in this repository's Actions
+settings (16.10.2026). It files its report as a GitHub issue, and a fork starts with
+issues off, so here it could only fail — 16 of 16 red in October while its audit
+returned `status: ok`. The upstream runs the same check on its own repository. The
+house's check that Twenty's next version still carries its acts is `twenty parity
+check`, above. Re-enable with `gh workflow enable upstream-drift.yml` once this
+repository has somewhere for the report to land.
