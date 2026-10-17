@@ -64,8 +64,8 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
   by a word in its transcript, which Twenty's own `search` does not read (at v2.44.0 it
   indexes a mail's subject and a recording's title only). It reads only what the instance
   stores, through the same API as every other command, and returns each hit with its
-  Company, its date and the record to open, newest first. See
-  `packages/twenty-sdk/src/cli/commands/search-text/`.
+  Company, its date and the record to open, newest first — every hit unless `--limit`
+  caps them. See `packages/twenty-sdk/src/cli/commands/search-text/`.
 - `twenty company read <name-or-id>` — one read of a Company: the Company, its People,
   its Opportunities and every open Task that hangs on the Company or on any of its
   Opportunities, each Task with its title, due date, assignee by name and the address its

@@ -11,7 +11,7 @@ type Kind = "mail" | "call";
 
 interface SearchTextOptions {
   only?: string;
-  limit: string;
+  limit?: string;
 }
 
 interface Company {
@@ -205,15 +205,17 @@ export function registerSearchTextCommand(program: Command): void {
     .description("Find a mail by a word in its text and a call by a word in its transcript")
     .argument("<phrase>", "A word or a short phrase, German or English")
     .option("--only <kinds>", "mail, call, or both comma-separated (default: both)")
-    .option("--limit <number>", "Maximum hits", "20");
+    .option("--limit <number>", "Maximum hits, newest first (default: every hit)");
   applyGlobalOptions(cmd);
 
   cmd.action(async (phrase: string, options: SearchTextOptions, command: Command) => {
     if (phraseWords(phrase).length === 0) {
       throw new CliError("Search for a word or a phrase, not nothing.", "INVALID_ARGUMENTS");
     }
-    const limit = parseInt(options.limit, 10);
-    if (!Number.isInteger(limit) || limit < 1) {
+    // No cap unless asked for: a mail that holds the word is among the hits however common
+    // the word, rather than cut off behind newer ones.
+    const limit = options.limit === undefined ? Infinity : Number(options.limit);
+    if (limit !== Infinity && (!Number.isInteger(limit) || limit < 1)) {
       throw new CliError(
         `--limit must be a positive number; got "${options.limit}".`,
         "INVALID_ARGUMENTS",
