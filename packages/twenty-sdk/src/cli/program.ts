@@ -31,6 +31,7 @@ import { registerRolesCommand } from "./commands/roles/roles.command";
 import { registerRouteTriggersCommand } from "./commands/route-triggers/route-triggers.command";
 import { registerRoutesCommand } from "./commands/routes/routes.command";
 import { registerSchemaCommand } from "./commands/schema/schema.command";
+import { registerSearchTextCommand } from "./commands/search-text/search-text.command";
 import { registerSearchCommand } from "./commands/search/search.command";
 import { registerServerlessCommand } from "./commands/serverless/serverless.command";
 import { registerSkillsCommand } from "./commands/skills/skills.command";
@@ -61,6 +62,7 @@ export function buildProgram(): Command {
   registerGraphqlCommand(program);
   registerAuthCommand(program);
   registerSearchCommand(program);
+  registerSearchTextCommand(program);
   registerWebhooksCommand(program);
   registerApiKeysCommand(program);
   registerCalendarChannelsCommand(program);
