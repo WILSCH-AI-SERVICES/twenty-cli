@@ -40,7 +40,7 @@ interface MessageNode {
   subject: string | null;
   text: string | null;
   receivedAt: string | null;
-  messageParticipants?: Connection<{ person?: { company?: Company | null } | null }>;
+  messageParticipants?: Connection<{ person?: { companyId?: string | null } | null }>;
 }
 
 interface CallNode {
@@ -57,7 +57,7 @@ const MESSAGES_QUERY = `
     messages(filter: $filter, first: 100, after: $after, orderBy: [{ receivedAt: DescNullsLast }]) {
       edges { node {
         id subject text receivedAt
-        messageParticipants { edges { node { person { company { id name } } } } }
+        messageParticipants { edges { node { person { companyId } } } }
       } }
       pageInfo { hasNextPage endCursor }
     }
@@ -99,38 +99,60 @@ async function page<T>(
 /**
  * A mail's Company is the Company of the people it was exchanged with, as Twenty files a mail
  * on a Company's timeline; a mail with none of its people on a Company has none, and when its
- * people sit on several, all are named.
+ * people sit on several, all are named. Only the ids are read with the mail: at v2.44.0 a
+ * Company nested three relations deep comes back null although the person's `companyId` is
+ * set, so the names are resolved in one read of the Companies afterwards.
  */
-function mailCompanies(node: MessageNode): Company[] {
-  const seen = new Map<string, Company>();
+function mailCompanyIds(node: MessageNode): string[] {
+  const ids = new Set<string>();
   for (const edge of node.messageParticipants?.edges ?? []) {
-    const company = edge.node.person?.company;
-    if (company?.id) seen.set(company.id, company);
+    const companyId = edge.node.person?.companyId;
+    if (companyId) ids.add(companyId);
   }
-  return [...seen.values()];
+  return [...ids];
+}
+
+const COMPANIES_QUERY = `
+  query SearchTextCompanies($filter: CompanyFilterInput, $after: String) {
+    companies(filter: $filter, first: 100, after: $after) {
+      edges { node { id name } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`;
+
+async function companyNames(services: CliServices, ids: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  if (ids.length === 0) return names;
+  const filter = { id: { in: ids } };
+  await page<Company>(services, COMPANIES_QUERY, "companies", { filter }, (company) => {
+    names.set(company.id, company.name);
+    return true;
+  });
+  return names;
 }
 
 async function searchMails(services: CliServices, phrase: string, limit: number) {
-  const hits: TextHit[] = [];
+  const found: Array<{ node: MessageNode; excerpt: string; companyIds: string[] }> = [];
   const filter = { or: likePatterns(phrase).map((ilike) => ({ text: { ilike } })) };
   await page<MessageNode>(services, MESSAGES_QUERY, "messages", { filter }, (node) => {
     const match = findPhrase(node.text ?? "", phrase);
-    if (match) {
-      const companies = mailCompanies(node);
-      hits.push({
-        kind: "mail",
-        date: node.receivedAt,
-        company: companies.length ? companies.map((c) => c.name).join(", ") : null,
-        companyId: companies.length ? companies.map((c) => c.id).join(",") : null,
-        title: node.subject ?? "",
-        excerpt: match.excerpt,
-        record: `message/${node.id}`,
-        open: `twenty api get messages ${node.id}`,
-      });
-    }
-    return hits.length < limit;
+    if (match) found.push({ node, excerpt: match.excerpt, companyIds: mailCompanyIds(node) });
+    return found.length < limit;
   });
-  return hits;
+  const names = await companyNames(services, [...new Set(found.flatMap((f) => f.companyIds))]);
+  return found.map(({ node, excerpt, companyIds }): TextHit => {
+    const named = companyIds.filter((id) => names.has(id));
+    return {
+      kind: "mail",
+      date: node.receivedAt,
+      company: named.length ? named.map((id) => names.get(id)).join(", ") : null,
+      companyId: named.length ? named.join(",") : null,
+      title: node.subject ?? "",
+      excerpt,
+      record: `message/${node.id}`,
+      open: `twenty api get messages ${node.id}`,
+    };
+  });
 }
 
 /**
