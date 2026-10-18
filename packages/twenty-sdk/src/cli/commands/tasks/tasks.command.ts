@@ -141,9 +141,12 @@ export function registerTasksCommand(program: Command): void {
     }
     if (missing.length > 0) refuse(missing);
     if (waitsOn && !(await findTask(services, waitsOn))) {
-      refuse([`--waits-on names Task ${waitsOn}, which is not on the instance; nothing was written`], {
-        afterRead: true,
-      });
+      refuse(
+        [`--waits-on names Task ${waitsOn}, which is not on the instance; nothing was written`],
+        {
+          afterRead: true,
+        },
+      );
     }
 
     const data: Record<string, unknown> = {
@@ -268,7 +271,9 @@ export function registerTasksCommand(program: Command): void {
 
       await readTask(services, id);
       if (target && !(await findTask(services, target))) {
-        refuse([`Task ${target} is not on the instance; Task ${id} is unchanged`], { afterRead: true });
+        refuse([`Task ${target} is not on the instance; Task ${id} is unchanged`], {
+          afterRead: true,
+        });
       }
 
       await services.records.update("tasks", id, { waitsOnId: target ?? null });
@@ -292,7 +297,9 @@ export function registerTasksCommand(program: Command): void {
 
       const missing: string[] = [];
       if (!!options.clear === (ticketArg !== undefined)) {
-        missing.push(`pass either the ticket or --clear, not ${options.clear ? "both" : "neither"}`);
+        missing.push(
+          `pass either the ticket or --clear, not ${options.clear ? "both" : "neither"}`,
+        );
       }
       const ticket = ticketArg === undefined ? "" : ticketFrom(ticketArg, missing);
       if (missing.length > 0) refuse([...missing, `Task ${id} is unchanged`]);

@@ -34,14 +34,37 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
     updates = [];
     creates = [];
     store = new Map<string, Stored>([
-      ["t1", { id: "t1", title: "We owe the offer", status: "TODO", bodyV2: { markdown: NOTE }, waitsOnId: null, ticket: "" }],
-      ["t2", { id: "t2", title: "They owe the answer", status: "TODO", bodyV2: { markdown: NOTE }, waitsOnId: null, ticket: "" }],
+      [
+        "t1",
+        {
+          id: "t1",
+          title: "We owe the offer",
+          status: "TODO",
+          bodyV2: { markdown: NOTE },
+          waitsOnId: null,
+          ticket: "",
+        },
+      ],
+      [
+        "t2",
+        {
+          id: "t2",
+          title: "They owe the answer",
+          status: "TODO",
+          bodyV2: { markdown: NOTE },
+          waitsOnId: null,
+          ticket: "",
+        },
+      ],
     ]);
     let next = 0;
     const get = vi.fn(async (url: string) => {
       const id = decodeURIComponent(url.replace("/rest/tasks/", ""));
       const task = store.get(id);
-      if (!task) throw Object.assign(new Error("Request failed with status code 404"), { response: { status: 404 } });
+      if (!task)
+        throw Object.assign(new Error("Request failed with status code 404"), {
+          response: { status: 404 },
+        });
       return { data: { data: { task: { ...task } } } };
     });
     mockCreateCommandContext.mockReset();
@@ -63,7 +86,9 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
             return store.get(id);
           }),
         },
-        output: { render: vi.fn(async (value: Record<string, unknown>) => void (rendered = value)) },
+        output: {
+          render: vi.fn(async (value: Record<string, unknown>) => void (rendered = value)),
+        },
       },
     });
   });
@@ -84,7 +109,10 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
       await run("wait-on", "t1", "t2");
 
       expect(updates).toEqual([["t1", { waitsOnId: "t2" }]]);
-      expect(rendered).toMatchObject({ id: "t1", waitsOn: { id: "t2", title: "They owe the answer" } });
+      expect(rendered).toMatchObject({
+        id: "t1",
+        waitsOn: { id: "t2", title: "They owe the answer" },
+      });
       expect(rendered!.note).toBe(NOTE);
     });
 
@@ -97,7 +125,9 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
     });
 
     it("refuses a Task the instance does not hold, and writes nothing", async () => {
-      expect(await refusal("wait-on", "t1", "missing")).toContain("Task missing is not on the instance");
+      expect(await refusal("wait-on", "t1", "missing")).toContain(
+        "Task missing is not on the instance",
+      );
       expect(updates).toEqual([]);
     });
 
