@@ -17,7 +17,7 @@ vi.mock("../../../utilities/shared/context", async () => {
 type Stored = Record<string, unknown> & { id: string };
 
 const NOTE =
-  "Rests on: [our mail 18.10](https://mail.google.com/mail/u/0/#all/abc)\n\nIssue: [DaveX2001/deliverable-tracking#3388](https://github.com/DaveX2001/deliverable-tracking/issues/3388)";
+  "Rests on: [our mail 18.10](https://example.com/mail/abc)\n\nIssue: [DaveX2001/deliverable-tracking#3388](https://github.com/DaveX2001/deliverable-tracking/issues/3388)";
 
 describe("tasks command — wait-on, set-ticket, and create taking both (#3388)", () => {
   let program: Command;
@@ -139,7 +139,7 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
       "--title",
       "They owe the answer to our offer",
       "--rests-on",
-      "https://mail.google.com/mail/u/0/#all/abc",
+      "https://example.com/mail/abc",
       "--rests-on-label",
       "our mail 18.10",
       "--issue",
