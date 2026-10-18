@@ -24,6 +24,8 @@ interface TaskCreateOptions {
   opportunity?: string;
   due?: string;
   assignee?: string;
+  waitsOn?: string;
+  ticket?: string;
 }
 
 interface TaskNoteOptions {
@@ -37,11 +39,22 @@ interface TaskCloseOptions {
   proofLabel?: string;
 }
 
-type TaskRecord = { id: string; status?: string; title?: string; bodyV2?: { markdown?: string } };
+interface TaskClearOptions {
+  clear?: boolean;
+}
 
-function refuse(missing: string[]): never {
+type TaskRecord = {
+  id: string;
+  status?: string;
+  title?: string;
+  bodyV2?: { markdown?: string };
+  waitsOnId?: string | null;
+  ticket?: string | null;
+};
+
+function refuse(missing: string[], { afterRead = false } = {}): never {
   throw new CliError(
-    `Refused before it reached the instance:\n  - ${missing.join("\n  - ")}`,
+    `${afterRead ? "Refused after reading the instance, before any write" : "Refused before it reached the instance"}:\n  - ${missing.join("\n  - ")}`,
     REFUSED,
   );
 }
@@ -79,11 +92,21 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  * today, and sets the Task done. Each re-reads the Task from the instance after the write
  * and prints what is stored. Whatever route a write takes, the transport's guard
  * (`utilities/house-rules/write-guard.ts`) refuses a note outside this shape.
+ *
+ * `wait-on` / `set-ticket` — the Task's two fields from #3387, each with a command of its
+ * own (#3388): `wait-on` names the Task this one waits on (`waitsOnId`, a Task→Task
+ * relation) or clears it, `set-ticket` sets or clears its ticket at the counterparty
+ * (`ticket`, text). Each writes that one field and nothing else. `create` takes both, so a
+ * session staging an act writes the act's Task and the next one waiting on it in two
+ * `create`s and no further write; a waits-on naming a Task the instance does not hold is
+ * refused before anything is written.
  */
 export function registerTasksCommand(program: Command): void {
   const tasks = program
     .command("tasks")
-    .description("Tasks with their note in the house's one shape");
+    .description(
+      "Tasks with their note in the house's one shape, the Task each waits on, and its ticket",
+    );
   applyGlobalOptions(tasks);
 
   const create = tasks
@@ -96,7 +119,9 @@ export function registerTasksCommand(program: Command): void {
     .option("--company <id>", "The Company the Task is on")
     .option("--opportunity <id>", "The Opportunity the Task is on")
     .option("--due <date>", "Due date (ISO 8601)")
-    .option("--assignee <workspaceMemberId>", "Who acts");
+    .option("--assignee <workspaceMemberId>", "Who acts")
+    .option("--waits-on <taskId>", "The Task this one waits on (it must exist)")
+    .option("--ticket <number>", "Its ticket at the counterparty, e.g. 19966");
   applyGlobalOptions(create);
 
   create.action(async (_options: unknown, command: Command) => {
@@ -109,7 +134,20 @@ export function registerTasksCommand(program: Command): void {
     if (!options.company === !options.opportunity) {
       missing.push("a Task stands on one record — pass exactly one of --company or --opportunity");
     }
+    const ticket = options.ticket === undefined ? undefined : ticketFrom(options.ticket, missing);
+    const waitsOn = options.waitsOn?.trim();
+    if (options.waitsOn !== undefined && !waitsOn) {
+      missing.push("--waits-on is empty — pass the id of the Task this one waits on");
+    }
     if (missing.length > 0) refuse(missing);
+    if (waitsOn && !(await findTask(services, waitsOn))) {
+      refuse(
+        [`--waits-on names Task ${waitsOn}, which is not on the instance; nothing was written`],
+        {
+          afterRead: true,
+        },
+      );
+    }
 
     const data: Record<string, unknown> = {
       title: options.title!.trim(),
@@ -118,6 +156,8 @@ export function registerTasksCommand(program: Command): void {
     };
     if (options.due) data.dueAt = options.due;
     if (options.assignee) data.assigneeId = options.assignee;
+    if (waitsOn) data.waitsOnId = waitsOn;
+    if (ticket !== undefined) data.ticket = ticket;
 
     const created = (await services.records.create("tasks", data)) as TaskRecord;
     await services.records.create("taskTargets", {
@@ -207,6 +247,93 @@ export function registerTasksCommand(program: Command): void {
 
     await renderStored(services, id, globalOptions);
   });
+
+  const waitOn = tasks
+    .command("wait-on")
+    .description("Name the Task this Task waits on, or clear it with --clear")
+    .argument("<id>", "The Task that waits")
+    .argument("[waitsOnId]", "The Task it waits on")
+    .option("--clear", "Clear it: the Task waits on nothing");
+  applyGlobalOptions(waitOn);
+
+  waitOn.action(
+    async (id: string, waitsOnId: string | undefined, _options: unknown, command: Command) => {
+      const { globalOptions, services } = await createCommandContext(command);
+      const options = command.opts() as TaskClearOptions;
+
+      const target = waitsOnId?.trim() || undefined;
+      if (!!options.clear === !!target) {
+        refuse([
+          `pass either the Task ${id} waits on or --clear, not ${options.clear ? "both" : "neither"}; Task ${id} is unchanged`,
+        ]);
+      }
+      if (target === id) refuse([`Task ${id} cannot wait on itself; it is unchanged`]);
+
+      await readTask(services, id);
+      if (target && !(await findTask(services, target))) {
+        refuse([`Task ${target} is not on the instance; Task ${id} is unchanged`], {
+          afterRead: true,
+        });
+      }
+
+      await services.records.update("tasks", id, { waitsOnId: target ?? null });
+
+      await renderStored(services, id, globalOptions);
+    },
+  );
+
+  const setTicket = tasks
+    .command("set-ticket")
+    .description("Set the Task's ticket at the counterparty, or clear it with --clear")
+    .argument("<id>", "The Task's id")
+    .argument("[ticket]", "The ticket number at the counterparty, e.g. 19966")
+    .option("--clear", "Clear it: the ticket field left empty");
+  applyGlobalOptions(setTicket);
+
+  setTicket.action(
+    async (id: string, ticketArg: string | undefined, _options: unknown, command: Command) => {
+      const { globalOptions, services } = await createCommandContext(command);
+      const options = command.opts() as TaskClearOptions;
+
+      const missing: string[] = [];
+      if (!!options.clear === (ticketArg !== undefined)) {
+        missing.push(
+          `pass either the ticket or --clear, not ${options.clear ? "both" : "neither"}`,
+        );
+      }
+      const ticket = ticketArg === undefined ? "" : ticketFrom(ticketArg, missing);
+      if (missing.length > 0) refuse([...missing, `Task ${id} is unchanged`]);
+
+      await readTask(services, id);
+      await services.records.update("tasks", id, { ticket });
+
+      await renderStored(services, id, globalOptions);
+    },
+  );
+}
+
+/** The ticket as it will be stored, trimmed; a blank one is pushed onto `missing`. */
+function ticketFrom(raw: string, missing: string[]): string {
+  const ticket = raw.trim();
+  if (!ticket) missing.push("the ticket is empty — pass the counterparty's ticket number");
+  return ticket;
+}
+
+/** The Task as stored, or undefined when the instance holds none by that id. */
+async function findTask(
+  services: Awaited<ReturnType<typeof createCommandContext>>["services"],
+  id: string,
+): Promise<TaskRecord | undefined> {
+  try {
+    const response = await services.api.get<{ data?: { task?: TaskRecord } }>(
+      `/rest/tasks/${encodeURIComponent(id)}`,
+    );
+    return response.data?.data?.task ?? undefined;
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response?.status;
+    if (status === 404 || status === 400) return undefined;
+    throw error;
+  }
 }
 
 async function readTask(
@@ -228,8 +355,16 @@ async function renderStored(
   globalOptions: Awaited<ReturnType<typeof createCommandContext>>["globalOptions"],
 ): Promise<void> {
   const task = await readTask(services, id);
+  const waitsOn = task.waitsOnId ? await findTask(services, task.waitsOnId) : undefined;
   await services.output.render(
-    { id: task.id, title: task.title, status: task.status, note: task.bodyV2?.markdown ?? null },
+    {
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      waitsOn: task.waitsOnId ? { id: task.waitsOnId, title: waitsOn?.title ?? null } : null,
+      ticket: task.ticket || null,
+      note: task.bodyV2?.markdown ?? null,
+    },
     { format: globalOptions.output, query: globalOptions.query },
   );
 }
