@@ -646,5 +646,28 @@ describe("ApiService", () => {
       ).resolves.toBeUndefined();
       expect(mockAxiosInstance.patch).not.toHaveBeenCalled();
     });
+
+    it("judges a later row on the same record against the record as the earlier row leaves it", async () => {
+      // Row 1 closes the Task properly; row 2 moves it back to TODO with the proof line still
+      // standing. Against the stored, open Task row 2 looks harmless; after row 1 it is not.
+      const service = new ApiService(mockConfigService as any);
+      readBack();
+      const today = new Date();
+      const dm = `${String(today.getDate()).padStart(2, "0")}.${String(today.getMonth() + 1).padStart(2, "0")}`;
+      const closed = `${note}\n\nClosed ${dm} · proof: [the reply](https://github.com/acme/deals/issues/2)`;
+
+      const judged = service.judgeWrites(
+        [
+          { method: "patch", url: "/rest/tasks/a", data: { status: "DONE", bodyV2: { markdown: closed } } },
+          { method: "patch", url: "/rest/tasks/a", data: { status: "TODO" } },
+        ],
+        "row",
+      );
+
+      await expect(judged).rejects.toThrow(/row 2 of 2/);
+      await expect(judged).rejects.toThrow(/nothing was written/);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.patch).not.toHaveBeenCalled();
+    });
   });
 });

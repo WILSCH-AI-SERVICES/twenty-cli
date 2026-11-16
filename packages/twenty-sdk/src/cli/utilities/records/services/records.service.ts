@@ -131,7 +131,12 @@ export class RecordsService {
     records: Record<string, unknown>[],
     options: BatchUpdateOptions = {},
   ): Promise<unknown> {
-    const concurrency = options.concurrency ?? DEFAULT_BATCH_UPDATE_CONCURRENCY;
+    // A batch naming one record twice is judged row after row, each row against the record as
+    // the rows before it leave it; it is sent in that order, one row at a time, so the record
+    // passes through the states it was judged in (CCI#1349).
+    const ids = records.map((record) => extractRecordId(record));
+    const concurrency =
+      new Set(ids).size < ids.length ? 1 : (options.concurrency ?? DEFAULT_BATCH_UPDATE_CONCURRENCY);
     // One request per row leaves below, each judged by the guard as it leaves; judged whole
     // here first, a batch with one refused row sends no row (CCI#1349).
     await this.api.judgeWrites(

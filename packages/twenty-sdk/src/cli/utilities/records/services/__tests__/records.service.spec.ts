@@ -371,6 +371,41 @@ describe("RecordsService", () => {
       expect(mockApi.patch).not.toHaveBeenCalled();
     });
 
+    it("sends a batch naming one record twice in order, one row at a time (CCI#1349)", async () => {
+      const order: string[] = [];
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const mockApi = {
+        judgeWrites: vi.fn().mockResolvedValue(undefined),
+        patch: vi.fn().mockImplementation(async (url: string, data: Record<string, unknown>) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          order.push(`${url} ${JSON.stringify(data)}`);
+          inFlight -= 1;
+          return { data: {} };
+        }),
+      };
+
+      const service = new RecordsService(mockApi as any);
+      await service.batchUpdate(
+        "tasks",
+        [
+          { id: "1", status: "DONE" },
+          { id: "2", dueAt: "2026-12-23" },
+          { id: "1", status: "TODO" },
+        ],
+        { concurrency: 8 },
+      );
+
+      expect(maxInFlight).toBe(1);
+      expect(order).toEqual([
+        '/rest/tasks/1 {"status":"DONE"}',
+        '/rest/tasks/2 {"dueAt":"2026-12-23"}',
+        '/rest/tasks/1 {"status":"TODO"}',
+      ]);
+    });
+
     it("batch deletes records", async () => {
       const mockApi = {
         delete: vi.fn().mockResolvedValue({ data: { deleteTasks: [{ id: "1" }] } }),
