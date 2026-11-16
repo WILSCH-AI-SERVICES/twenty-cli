@@ -412,7 +412,9 @@ async function judge(write: IntendedWrite, readStored: StoredReader): Promise<st
               write.object === "task"
                 ? "title, note and status"
                 : "stage and why it stopped progressing"
-            } cannot be checked before it lands; update the surviving record and delete the other`,
+            } cannot be checked before it lands; update the surviving record and delete the other${
+              write.object === "task" ? `; ${RETITLE_RULE}` : ""
+            }`,
           ];
     case "updateMany": {
       const data = isRecord(write.data) ? write.data : {};
@@ -431,7 +433,9 @@ async function judge(write: IntendedWrite, readStored: StoredReader): Promise<st
     case "create": {
       if (!isRecord(write.data)) return [`the ${noun} to create carries no fields`];
       const id = write.data.id;
-      if (write.upsert && typeof id === "string" && id !== "") {
+      // A create naming an id the instance already holds is judged as an update of that
+      // record, upsert or not — so no create form re-titles a Task or rewrites a closed one.
+      if (typeof id === "string" && id !== "") {
         const stored = await readStored(write.object, id);
         if (stored) {
           const { id: _id, ...rest } = write.data;

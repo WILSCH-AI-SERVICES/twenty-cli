@@ -431,6 +431,22 @@ describe("an open Task's title does not change (CCI#1346)", () => {
     );
   });
 
+  it("refuses a create or import that names an open Task's id with another title, upsert or not", async () => {
+    for (const url of ["/rest/tasks", "/rest/batch/tasks"]) {
+      await expect(
+        guardWrite(
+          {
+            method: "post",
+            baseURL: BASE,
+            url,
+            data: [{ id: "t1", title: "New", bodyV2: { markdown: OPEN } }],
+          },
+          titled("TODO"),
+        ),
+      ).rejects.toThrow(retitled);
+    }
+  });
+
   it("refuses a title written in the same write as the close or the reopening", async () => {
     await expect(
       guardWrite(
@@ -452,7 +468,15 @@ describe("an open Task's title does not change (CCI#1346)", () => {
         { method: "post", baseURL: BASE, url: "/rest/tasks/merge", data: { ids: ["a", "b"] } },
         none,
       ),
-    ).rejects.toThrow(/title, note and status/);
+    ).rejects.toThrow(/title, note and status.*an open Task's title does not change/);
+  });
+
+  it("lets a Task whose title is empty or blank take its first title, as the store does", async () => {
+    for (const before of ["", "  "]) {
+      await expect(
+        guardWrite(patchTask({ title: "The first title" }), titled("TODO", before)),
+      ).resolves.toBeUndefined();
+    }
   });
 
   it("lets a write that leaves the title as it stood through, and the moves that never name it", async () => {

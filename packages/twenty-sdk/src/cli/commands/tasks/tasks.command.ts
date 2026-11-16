@@ -201,7 +201,7 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  *                 the same Company already carries, and print that Task: id, title, date
  */
 const TITLE_RULES =
-  "An open Task's title does not change: a changed owing closes the Task on its proof and writes the next one. A second open Task with the same title on a Company is refused, by create and by reopen, showing the Task that stands (its id, title and date); a Task closed with that title does not count.";
+  "An open Task's title does not change: a changed owing closes the Task on its proof and writes the next one. A second open Task with the same title on a Company is refused (surrounding spaces aside), by create and by reopen, showing the Task that stands (its id, title and date); a Task closed with that title does not count.";
 
 export function registerTasksCommand(program: Command): void {
   const tasks = program

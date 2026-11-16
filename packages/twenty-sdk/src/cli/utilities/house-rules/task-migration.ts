@@ -28,8 +28,6 @@
 
 import { createHash } from "node:crypto";
 
-import { titleKey } from "./task-title";
-
 export const OWES_VALUES = ["HOUSE", "OTHER_SIDE"] as const;
 
 export interface MigrationTaskState {
@@ -226,7 +224,7 @@ export function recordProblems(record: MigrationRecord): string[] {
         `${where} moves or clears a room it already had — the migration only names rooms titles named`,
       );
     }
-    const key = `${before.companyId ?? "(no company)"}\u0000${titleKey(after.title)}`;
+    const key = `${before.companyId ?? "(no company)"}\u0000${after.title.trim().toLowerCase()}`;
     byCompanyTitle.set(key, [...(byCompanyTitle.get(key) ?? []), row.id]);
   }
   for (const [key, ids] of byCompanyTitle) {

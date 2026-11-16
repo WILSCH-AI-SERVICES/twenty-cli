@@ -14,13 +14,14 @@
  *     Company, else its Person's. `twenty tasks create` and `twenty tasks reopen` run
  *     `standingProblem` against that Company's open Tasks before any write.
  *
- * Titles compare as `titleKey` reads them — trimmed, case folded — the same key the one
- * migration held its record to (`task-migration.ts`, `recordProblems`).
+ * Both checks read a title as the store does (crm-2990-twenty `sql/task-title.sql`): a Task
+ * whose title is empty or blank takes its first title, and titles compare trimmed, case kept
+ * (`titleKey`), so the tool never refuses a write the store would take.
  */
 
-/** A title as the second-Task refusal compares it. */
+/** A title as the second-Task refusal compares it: trimmed, case kept — as the store's btrim. */
 export function titleKey(title: unknown): string {
-  return typeof title === "string" ? title.trim().toLowerCase() : "";
+  return typeof title === "string" ? title.trim() : "";
 }
 
 /** The sentence every re-title refusal carries, whichever route sent it. */
@@ -41,6 +42,9 @@ export function titleChangeProblem(
   const before = typeof stored.title === "string" ? stored.title : "";
   const after = typeof data.title === "string" ? data.title : "";
   if (after === before) return undefined;
+  // A Task whose title is empty takes its first title — the browser creates a Task before its
+  // title is typed (crm-2990-twenty `sql/task-title.sql`, task_title_held).
+  if (before.trim() === "") return undefined;
   const statusAfter = "status" in data ? data.status : stored.status;
   const open = stored.status !== "DONE" || statusAfter !== "DONE";
   if (!open) return undefined;

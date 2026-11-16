@@ -517,7 +517,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
         ["--company", "c1"],
         ["--opportunity", "o1"],
       ]) {
-        const message = await refusal(...create(" we owe the OFFER ", on));
+        const message = await refusal(...create("  We owe the offer ", on));
         expect(message).toContain("a second open Task with the same title on a Company is refused");
         expect(message).toContain('Task t1 · "We owe the offer" · due 2026-12-01');
         expect(message).toContain("nothing was written");
@@ -533,7 +533,8 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       await run(...create("The answer, given", ["--company", "c1"]));
       await run(...create("We owe the offer", ["--company", "c2"]));
       await run(...create("We owe the offer", ["--opportunity", "o2"]));
-      expect(creates.filter(([object]) => object === "tasks")).toHaveLength(3);
+      await run(...create("we owe the OFFER", ["--company", "c1"]));
+      expect(creates.filter(([object]) => object === "tasks")).toHaveLength(4);
     });
 
     it("refuses a Company or an Opportunity the instance does not hold, before any write", async () => {
