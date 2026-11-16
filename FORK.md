@@ -89,6 +89,15 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
   `tasks create` takes `--owes`, `--owes-person` and `--room`. A closed Task refuses every
   move but the reopen, and the guard lets a done Task's note be rewritten by its reopening
   alone — the rule the store holds in crm-2990-twenty `sql/house-shape.sql`.
+- `twenty tasks migrate --record <path> [--dry-run]` runs the one migration of A Task's Life
+  Part 5 (DaveX2001/claude-code-improvements#1342) from its before→after record, versioned in
+  crm-2990-twenty `migrations/`: who owes and the room into their fields, each title cut to
+  what is owed, a waiting Task's date cleared. It refuses before any write unless every open
+  Task stands exactly as the record's `before` reads it (a Settle that wrote in between stops
+  it) and no two open Tasks on one Company would share a title; it writes only the fields a
+  row changes, never the note, status, assignee, wait or targets; then re-reads every Task and
+  exits non-zero on any that does not read as its row. A row already standing as its `after`
+  is not written again, so the same record finishes a run that stopped part-way.
 
 ## Building and installing from source
 
