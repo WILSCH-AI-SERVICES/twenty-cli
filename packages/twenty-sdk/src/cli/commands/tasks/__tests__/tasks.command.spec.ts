@@ -38,6 +38,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
   let updates: Array<[string, Record<string, unknown>]>;
   let creates: Array<[string, Record<string, unknown>]>;
   let deletes: Array<[string, string]>;
+  let reads: Array<[string, string | undefined]>;
 
   beforeEach(() => {
     program = new Command();
@@ -47,6 +48,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
     updates = [];
     creates = [];
     deletes = [];
+    reads = [];
     const task = (
       id: string,
       title: string,
@@ -68,11 +70,12 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
     ];
     store = {
       tasks: new Map([
-        task("t1", "We owe the offer"),
+        task("t1", "We owe the offer", { companyId: "c1" }),
         task("t2", "They owe the answer"),
         task("roomed", "The agenda point", { roomId: "e1", dueAt: "2026-11-30T00:00:00.000Z" }),
         task("done", "The answer, given", {
           status: "DONE",
+          companyId: "c1",
           bodyV2: { markdown: `${NOTE}\n\n${CLOSED}` },
         }),
       ]),
@@ -101,7 +104,10 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
         ["c1", { id: "c1" }],
         ["c2", { id: "c2" }],
       ]),
-      opportunities: new Map([["o1", { id: "o1" }]]),
+      opportunities: new Map([
+        ["o1", { id: "o1", companyId: "c1" }],
+        ["o2", { id: "o2", companyId: null }],
+      ]),
       workspaceMembers: new Map([["m1", { id: "m1" }]]),
       taskTargets: new Map([["tt1", { id: "tt1", taskId: "t1", targetCompanyId: "c1" }]]),
     };
@@ -132,6 +138,13 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       services: {
         api: { get },
         records: {
+          listAll: vi.fn(async (object: string, options: { filter?: string }) => {
+            const companyId = /^companyId\[eq\]:"(.*)"$/.exec(options.filter ?? "")?.[1];
+            reads.push([object, options.filter]);
+            return {
+              data: [...store[object]!.values()].filter((r) => r.companyId === companyId),
+            };
+          }),
           create: vi.fn(async (object: string, data: Record<string, unknown>) => {
             creates.push([object, data]);
             const id = object === "tasks" ? `new-${++next}` : `target-${++next}`;
@@ -484,6 +497,78 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       );
       expect(await refusal(...base, "--room", "e1", "--due", "2026-12-01")).toContain("not both");
       expect(creates).toEqual([]);
+    });
+  });
+
+  describe("a second open Task with the same title on a Company (CCI#1346)", () => {
+    const create = (title: string, on: string[]) => [
+      "create",
+      "--title",
+      title,
+      "--rests-on",
+      "https://example.com/mail/abc",
+      "--rests-on-label",
+      "our mail 18.10",
+      ...on,
+    ];
+
+    it("refuses it by --company and by --opportunity, showing the Task that stands, and writes nothing", async () => {
+      for (const on of [
+        ["--company", "c1"],
+        ["--opportunity", "o1"],
+      ]) {
+        const message = await refusal(...create("  We owe the offer ", on));
+        expect(message).toContain("a second open Task with the same title on a Company is refused");
+        expect(message).toContain('Task t1 · "We owe the offer" · due 2026-12-01');
+        expect(message).toContain("nothing was written");
+      }
+      expect(reads).toEqual([
+        ["tasks", 'companyId[eq]:"c1"'],
+        ["tasks", 'companyId[eq]:"c1"'],
+      ]);
+      expect(creates).toEqual([]);
+    });
+
+    it("writes a Task titled like a closed one on its Company, and like an open one on another", async () => {
+      await run(...create("The answer, given", ["--company", "c1"]));
+      await run(...create("We owe the offer", ["--company", "c2"]));
+      await run(...create("We owe the offer", ["--opportunity", "o2"]));
+      await run(...create("we owe the OFFER", ["--company", "c1"]));
+      expect(creates.filter(([object]) => object === "tasks")).toHaveLength(4);
+    });
+
+    it("refuses a Company or an Opportunity the instance does not hold, before any write", async () => {
+      expect(await refusal(...create("x", ["--company", "ghost"]))).toContain(
+        "--company names Company ghost, which is not on the instance",
+      );
+      expect(await refusal(...create("x", ["--opportunity", "ghost"]))).toContain(
+        "--opportunity names Opportunity ghost, which is not on the instance",
+      );
+      expect(creates).toEqual([]);
+    });
+
+    it("refuses reopening a closed Task whose title an open Task on its Company carries", async () => {
+      store.tasks!.set("t3", {
+        ...store.tasks!.get("t1")!,
+        id: "t3",
+        title: "The answer, given",
+        dueAt: null,
+      });
+      const message = await refusal("reopen", "done", "--why", "the reply was on another matter");
+      expect(message).toContain('Task t3 · "The answer, given" · no date');
+      expect(message).toContain("Task done stays done");
+      expect(updates).toEqual([]);
+    });
+
+    it("says both refusals in tasks --help and tasks create --help", () => {
+      const tasks = program.commands.find((c) => c.name() === "tasks")!;
+      const createCommand = tasks.commands.find((c) => c.name() === "create")!;
+      for (const help of [tasks.helpInformation(), createCommand.helpInformation()]) {
+        const flat = help.replace(/\s+/g, " ");
+        expect(flat).toContain("An open Task's title does not change");
+        expect(flat).toContain("A second open Task with the same title on a Company is refused");
+        expect(flat).toContain("showing the Task that stands");
+      }
     });
   });
 

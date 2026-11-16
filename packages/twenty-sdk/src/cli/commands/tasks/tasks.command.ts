@@ -25,6 +25,11 @@ import {
   reopenNote,
   type IssueRef,
 } from "../../utilities/house-rules/task-note";
+import {
+  standingProblem,
+  standingTasks,
+  type StandingTask,
+} from "../../utilities/house-rules/task-title";
 import { REFUSED } from "../../utilities/house-rules/write-guard";
 import { createCommandContext } from "../../utilities/shared/context";
 import { applyGlobalOptions } from "../../utilities/shared/global-options";
@@ -87,6 +92,7 @@ type TaskRecord = {
   owes?: string | null;
   owesPersonId?: string | null;
   roomId?: string | null;
+  companyId?: string | null;
 };
 
 type TaskTarget = {
@@ -184,19 +190,32 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  * and a record the instance does not hold, before anything is written; each re-reads the
  * Task after the write and prints what is stored. Whatever route a write takes, the
  * transport's guard (`utilities/house-rules/write-guard.ts`) refuses a note outside the
- * shape, and the store beneath Twenty holds the same rules (crm-2990-twenty `sql/`).
+ * shape and a new title on an open Task, and the store beneath Twenty holds the same rules
+ * (crm-2990-twenty `sql/`).
+ *
+ * The two moves the record refuses (CCI#1346, `utilities/house-rules/task-title.ts`), both
+ * said in the help below since the help is where a session learns its moves:
+ *
+ *   a new title   an open Task is never re-titled, by any command or raw route
+ *   a second Task `create`, and `reopen`, refuse an open Task whose title an open Task on
+ *                 the same Company already carries, and print that Task: id, title, date
  */
+const TITLE_RULES =
+  "An open Task's title does not change: a changed owing closes the Task on its proof and writes the next one. A second open Task with the same title on a Company is refused (surrounding spaces aside), by create and by reopen, showing the Task that stands (its id, title and date); a Task closed with that title does not count.";
+
 export function registerTasksCommand(program: Command): void {
   const tasks = program
     .command("tasks")
     .description(
-      "Tasks with their note in the house's one shape, and every move a Task allows: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and reopen",
+      `Tasks with their note in the house's one shape, and every move a Task allows: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and reopen. ${TITLE_RULES}`,
     );
   applyGlobalOptions(tasks);
 
   const create = tasks
     .command("create")
-    .description("Write an open Task on a Company or an Opportunity, its note in the one shape")
+    .description(
+      `Write an open Task on a Company or an Opportunity, its note in the one shape. ${TITLE_RULES}`,
+    )
     .option(
       "--title <text>",
       "What is owed, in one line — who owes it and its room go in their own flags",
@@ -256,7 +275,31 @@ export function registerTasksCommand(program: Command): void {
     if (room && !(await findEvent(services, room))) {
       absent.push(`--room names calendar event ${room}, which is not on the instance`);
     }
+    // The Company the store will derive for this Task: its Company, else its Opportunity's.
+    let companyId: string | undefined;
+    if (options.company) {
+      if (await findRecord(services, "companies", options.company)) companyId = options.company;
+      else absent.push(`--company names Company ${options.company}, which is not on the instance`);
+    } else {
+      const opportunity = await findRecord(services, "opportunities", options.opportunity!);
+      if (!opportunity) {
+        absent.push(
+          `--opportunity names Opportunity ${options.opportunity}, which is not on the instance`,
+        );
+      } else if (typeof opportunity.companyId === "string" && opportunity.companyId) {
+        companyId = opportunity.companyId;
+      }
+    }
     if (absent.length > 0) refuse([...absent, "nothing was written"], { afterRead: true });
+
+    if (companyId) {
+      const standing = standingTasks(await companyTasks(services, companyId), options.title!);
+      if (standing.length > 0) {
+        refuse(standingProblem(standing, companyId, `a new open Task "${options.title!.trim()}"`), {
+          afterRead: true,
+        });
+      }
+    }
 
     const data: Record<string, unknown> = {
       title: options.title!.trim(),
@@ -389,6 +432,27 @@ export function registerTasksCommand(program: Command): void {
     const reopened = reopenNote(stored.bodyV2?.markdown ?? "", why!);
     if (!reopened.markdown) {
       refuse([...reopened.problems, `Task ${id} is unchanged`], { afterRead: true });
+    }
+    // Reopened, it is an open Task: it may not stand beside an open one with its title.
+    if (stored.companyId) {
+      const standing = standingTasks(
+        await companyTasks(services, stored.companyId),
+        stored.title ?? "",
+        id,
+      );
+      if (standing.length > 0) {
+        refuse(
+          [
+            ...standingProblem(
+              standing,
+              stored.companyId,
+              `reopening Task ${id} "${stored.title ?? ""}"`,
+            ),
+            `Task ${id} stays done`,
+          ],
+          { afterRead: true },
+        );
+      }
     }
 
     await services.records.update("tasks", id, {
@@ -776,6 +840,18 @@ export function registerTasksCommand(program: Command): void {
 async function listOpenTasks(services: Services): Promise<MigrationTaskState[]> {
   const all = await services.records.listAll("tasks", { limit: 200 });
   return (all.data as MigrationTaskState[]).filter((task) => task.status !== "DONE");
+}
+
+/**
+ * Every Task on a Company as the store derives it (`task.companyId`, crm-2990-twenty
+ * `sql/task-company.sql`), open or done; `standingTasks` picks the open ones.
+ */
+async function companyTasks(services: Services, companyId: string): Promise<StandingTask[]> {
+  const all = await services.records.listAll("tasks", {
+    filter: `companyId[eq]:"${companyId}"`,
+    limit: 200,
+  });
+  return all.data as StandingTask[];
 }
 
 /** The ticket as it will be stored, trimmed; a blank one is pushed onto `missing`. */
