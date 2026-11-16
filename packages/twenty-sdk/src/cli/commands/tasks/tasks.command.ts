@@ -1,6 +1,17 @@
+import { readFileSync } from "node:fs";
+
 import { Command } from "commander";
 
 import { CliError } from "../../utilities/errors/cli-error";
+import {
+  differences,
+  expectedAfter,
+  planAgainst,
+  recordProblems,
+  stateOf,
+  type MigrationRecord,
+  type MigrationTaskState,
+} from "../../utilities/house-rules/task-migration";
 import {
   appendClosingLine,
   checkTaskNote,
@@ -161,6 +172,13 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  *
  *   reopen        a close made in error undone on the same Task — back to to do, the closing
  *                 line kept as a dated line saying it was made in error and why
+ *
+ * And the one migration that brings the open Tasks to Part 5 (CCI#1342):
+ *
+ *   migrate       from its versioned before→after record: who owes and the room into their
+ *                 fields, titles cut to what is owed, waiting Tasks undated — refused unless
+ *                 every open Task stands as the record read it (utilities/house-rules/
+ *                 task-migration.ts holds the checks)
  *
  * Every move refuses a Task that is done (Part 5: "no other move touches a closed Task")
  * and a record the instance does not hold, before anything is written; each re-reads the
@@ -655,6 +673,109 @@ export function registerTasksCommand(program: Command): void {
 
     await renderStored(services, id, globalOptions);
   });
+
+  const migrate = tasks
+    .command("migrate")
+    .description(
+      "Run the one migration of A Task's Life Part 5 from its before→after record: who owes and the room into their fields, titles cut to what is owed, waiting Tasks undated — refused unless every open Task stands as the record read it",
+    )
+    .requiredOption("--record <path>", "The before→after record (JSON), at a pushed commit")
+    .option("--dry-run", "Check the record against the instance and print the plan; write nothing");
+  applyGlobalOptions(migrate);
+
+  migrate.action(async (_options: unknown, command: Command) => {
+    const { globalOptions, services } = await createCommandContext(command);
+    const options = command.opts() as { record: string; dryRun?: boolean };
+
+    let record: MigrationRecord;
+    try {
+      record = JSON.parse(readFileSync(options.record, "utf8")) as MigrationRecord;
+    } catch (error) {
+      refuse([
+        `the record ${options.record} could not be read as JSON: ${(error as Error).message}`,
+      ]);
+    }
+    const own = recordProblems(record!);
+    if (own.length > 0) refuse([...own, "nothing was written"]);
+
+    const roomDays = new Map<string, string | undefined>();
+    for (const row of record!.rows) {
+      const eventId = row.after.roomId;
+      if (eventId && !roomDays.has(eventId)) {
+        const day = berlinDay((await findEvent(services, eventId))?.startsAt);
+        roomDays.set(eventId, day ? `${day}T00:00:00.000Z` : undefined);
+      }
+    }
+    const roomDay = (eventId: string) => roomDays.get(eventId);
+
+    const open = await listOpenTasks(services);
+    const people = new Set<string>();
+    const absent: string[] = [];
+    for (const row of record!.rows) {
+      const person = row.after.owesPersonId;
+      if (person && person !== row.before.owesPersonId && !people.has(person)) {
+        if (await findRecord(services, "people", person)) people.add(person);
+        else absent.push(`row ${row.id} names who there ${person}, a Person not on the instance`);
+      }
+    }
+    const { plan, problems } = planAgainst(record!, open, roomDay);
+    if (absent.length + problems.length > 0) {
+      refuse([...absent, ...problems, "nothing was written"], { afterRead: true });
+    }
+
+    const written: string[] = [];
+    if (!options.dryRun) {
+      for (const step of plan) {
+        if (step.kind !== "write") continue;
+        await services.records.update("tasks", step.id, step.patch);
+        written.push(step.id);
+      }
+    }
+
+    // A fresh read of every Task the record names, held to the row it should now stand as.
+    const after = new Map((await listOpenTasks(services)).map((task) => [task.id, stateOf(task)]));
+    const rows = record!.rows.map((row) => {
+      const step = plan.find((p) => p.id === row.id)!;
+      const expected =
+        options.dryRun && step.kind === "write" ? row.before : expectedAfter(row, roomDay);
+      const now = after.get(row.id);
+      const off = now ? differences(expected, now) : ["the Task is no longer open"];
+      return {
+        id: row.id,
+        step: options.dryRun && step.kind === "write" ? "would-write" : step.kind,
+        patch: step.kind === "write" ? step.patch : undefined,
+        title: now?.title ?? null,
+        off,
+      };
+    });
+    const failed = rows.filter((row) => row.off.length > 0);
+    await services.output.render(
+      {
+        record: options.record,
+        dryRun: !!options.dryRun,
+        openBefore: open.length,
+        openAfter: after.size,
+        written: written.length,
+        alreadyDone: plan.filter((p) => p.kind === "done").length,
+        unchanged: plan.filter((p) => p.kind === "unchanged").length,
+        failed: failed.length,
+        rows,
+      },
+      { format: globalOptions.output, query: globalOptions.query },
+    );
+    if (failed.length > 0 || after.size !== open.length) {
+      throw new CliError(
+        `${failed.length} Task(s) do not read back as the record says, or the count of open Tasks moved (${open.length} → ${after.size})`,
+        "VERIFICATION_FAILED",
+      );
+    }
+  });
+}
+
+/** Every Task that is not done, as stored, with the fields the migration record names. */
+async function listOpenTasks(services: Services): Promise<MigrationTaskState[]> {
+  const all = await services.records.listAll("tasks", { limit: 200 });
+  return (all.data as MigrationTaskState[]).filter((task) => task.status !== "DONE");
 }
 
 /** The ticket as it will be stored, trimmed; a blank one is pushed onto `missing`. */
