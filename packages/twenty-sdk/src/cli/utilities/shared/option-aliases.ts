@@ -94,6 +94,8 @@ export const OPTION_ALIAS_OVERRIDES: Readonly<Record<string, readonly string[]>>
   // #3266: tasks create — "title" and "rests-on-label" collide with ttl-hours and role-id.
   "rests-on-label": ["rsl"],
   title: ["tit"],
+  // CCI#1341: tasks create — "owes" would derive "ws", workspace's alias.
+  owes: ["ow"],
 });
 
 export function collectOptionAliasEntries(program: Command): OptionAliasEntry[] {

@@ -14,7 +14,17 @@
  *   Closed 06.10 · proof: [Gregor, 02.10: access is set up](https://mail.google.com/...)
  *
  * `Issue:` is optional; the closing line is present exactly when the Task is done, and last.
- * Nothing else is part of the note: a retelling of the artifact is what the artifact is for.
+ * Nothing else is part of the note: a retelling of the artifact is what the artifact is for —
+ * save one line per close made in error (CCI#1341). Reopening a Task turns its closing line
+ * into
+ *
+ *   Closed 06.10 in error — reopened 16.11: the reply was on another matter · proof was: [Gregor, 02.10: access is set up](https://mail.google.com/...)
+ *
+ * keeping the wrong close's date and proof, dated the day of the reopening, with why; the
+ * Task is back to to do and can be closed again, its new proof line last (A Task's Life,
+ * Parts 4 and 5). `reopenNote` writes it, `reopeningProblems` tells a reopening from any other
+ * rewrite of a done Task's note, which stays refused. `sql/house-shape.sql` in
+ * crm-2990-twenty holds the same rule in the store.
  */
 
 export const DEFAULT_ISSUE_REPO = "DaveX2001/deliverable-tracking";
@@ -22,9 +32,13 @@ export const DEFAULT_ISSUE_REPO = "DaveX2001/deliverable-tracking";
 const RESTS_ON = /^Rests on: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
 const ISSUE = /^Issue: \[([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\]\(([^\s)]+)\)$/;
 const CLOSED = /^Closed (\d{2})\.(\d{2}) · proof: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
+const REOPENED =
+  /^Closed (\d{2})\.(\d{2}) in error — reopened (\d{2})\.(\d{2}): (.+) · proof was: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
 
 export const RESTS_ON_SHAPE = "Rests on: [what it is](address)";
 export const CLOSED_SHAPE = "Closed DD.MM · proof: [what it is](address)";
+export const REOPENED_SHAPE =
+  "Closed DD.MM in error — reopened DD.MM: why · proof was: [what it is](address)";
 
 export interface IssueRef {
   owner: string;
@@ -103,6 +117,82 @@ export function appendClosingLine(note: string, line: string): string {
   return `${note.trimEnd()}\n\n${line}`;
 }
 
+/** The lines a reopening left in `markdown`, in order — each a close made in error. */
+export function reopenLines(markdown: string | undefined | null): string[] {
+  return noteLines(markdown ?? "").filter((line) => REOPENED.test(line));
+}
+
+/** Whether a reason for a reopening is one line of text. */
+export function reasonProblem(why: string | undefined): string | undefined {
+  if (why === undefined || why.trim() === "") {
+    return "the reopening does not say why the close was made in error — pass --why <reason>";
+  }
+  if (/[\n\r]/.test(why)) return "the reason may not contain a line break";
+  return undefined;
+}
+
+/**
+ * The note of a done Task reopened today: its closing line turned into the reopen line,
+ * every other line as it stood. Problems are returned when the note does not end in a
+ * closing line, so there is no close to undo.
+ */
+export function reopenNote(
+  markdown: string,
+  why: string,
+  now: Date = new Date(),
+): { markdown?: string; problems: string[] } {
+  const lines = noteLines(markdown);
+  const closed = lines[lines.length - 1]?.match(CLOSED);
+  if (!closed) {
+    return {
+      problems: [
+        `the note does not end in a closing line (${CLOSED_SHAPE}), so there is no close to undo`,
+      ],
+    };
+  }
+  const [, dd, mm, label, url] = closed;
+  const line = `Closed ${dd}.${mm} in error — reopened ${formatDayMonth(now)}: ${why.trim()} · proof was: [${label}](${url})`;
+  return { markdown: [...lines.slice(0, -1), line].join("\n\n"), problems: [] };
+}
+
+/**
+ * Why rewriting a done Task's note from `before` to `after` is not its reopening; empty when
+ * it is. A reopening moves the Task off DONE and turns the closing line alone into the
+ * reopen line, keeping the close's date and proof, dated one of `reopenDates`, with a reason.
+ */
+export function reopeningProblems(
+  before: unknown,
+  after: unknown,
+  check: { nowOpen: boolean; reopenDates?: string[] },
+): string[] {
+  const rule =
+    "the Task is done — its note ends in its proof line, and a rewrite would lose it; a done Task's note is rewritten only by its reopening (twenty tasks reopen), which keeps the wrong close as a dated line";
+  if (!check.nowOpen || typeof before !== "string" || typeof after !== "string") return [rule];
+  const old = noteLines(before);
+  const next = noteLines(after);
+  if (old.length === 0 || next.length !== old.length) {
+    return [`${rule}: the reopening rewrites the closing line alone`];
+  }
+  const closed = old[old.length - 1]!.match(CLOSED);
+  const reopened = next[next.length - 1]!.match(REOPENED);
+  if (!closed || !reopened) return [`${rule}: the closing line becomes ${REOPENED_SHAPE}`];
+  if (old.slice(0, -1).some((line, i) => line !== next[i])) {
+    return [`${rule}: the reopening rewrites the closing line alone`];
+  }
+  const [, cd, cm, label, url] = closed;
+  const [, rd, rm, od, om, why, rLabel, rUrl] = reopened;
+  if (rd !== cd || rm !== cm || rLabel !== label || rUrl !== url) {
+    return [`${rule}: the reopen line must keep the wrong close's date and proof as they stood`];
+  }
+  if (check.reopenDates && !check.reopenDates.includes(`${od}.${om}`)) {
+    return [
+      `the reopen line is dated ${od}.${om}, not the day of the reopening (${check.reopenDates[0]})`,
+    ];
+  }
+  if (why!.trim() === "") return ["the reopening does not say why the close was made in error"];
+  return [];
+}
+
 function noteLines(markdown: string): string[] {
   return markdown
     .split(/\r?\n/)
@@ -174,10 +264,34 @@ export function checkTaskNote(markdown: unknown, check: NoteCheck): string[] {
   const extra = closed ? rest.slice(0, -1) : rest;
 
   for (const line of extra) {
+    const reopened = line.match(REOPENED);
+    if (reopened) {
+      const [, cd, cm, od, om, why, label, url] = reopened;
+      if (
+        ![
+          [cd, cm],
+          [od, om],
+        ].every(([d, m]) => Number(m) >= 1 && Number(m) <= 12 && Number(d) >= 1 && Number(d) <= 31)
+      ) {
+        problems.push(
+          `the reopen line "${excerpt(line)}" carries a date that is not a day of the year`,
+        );
+      }
+      if (why!.trim() === "") {
+        problems.push(
+          `the reopen line "${excerpt(line)}" does not say why the close was made in error`,
+        );
+      }
+      const labelIssue = labelProblem(label, "the reopen line's proof");
+      if (labelIssue) problems.push(labelIssue);
+      if (!isAddress(url))
+        problems.push(`the reopen line's proof address "${url}" is not an http(s) URL`);
+      continue;
+    }
     problems.push(
       CLOSED.test(line)
         ? `the closing line "${excerpt(line)}" is not the note's last line`
-        : `the note carries a line outside its shape: "${excerpt(line)}" — a note holds the address it rests on, the issue, and on close the proof line, nothing else`,
+        : `the note carries a line outside its shape: "${excerpt(line)}" — a note holds the address it rests on, the issue, a line for each close made in error, and on close the proof line, nothing else`,
     );
   }
 

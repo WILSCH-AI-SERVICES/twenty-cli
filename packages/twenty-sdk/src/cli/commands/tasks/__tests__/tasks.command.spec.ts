@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CliError } from "../../../utilities/errors/cli-error";
+import { formatDayMonth } from "../../../utilities/house-rules/task-note";
 import { REFUSED } from "../../../utilities/house-rules/write-guard";
 import { registerTasksCommand } from "../tasks.command";
 
@@ -18,13 +19,25 @@ type Stored = Record<string, unknown> & { id: string };
 
 const NOTE =
   "Rests on: [our mail 18.10](https://example.com/mail/abc)\n\nIssue: [DaveX2001/deliverable-tracking#3388](https://github.com/DaveX2001/deliverable-tracking/issues/3388)";
+const CLOSED = "Closed 14.11 · proof: [their reply 14.11](https://example.com/mail/reply)";
+const EMPTY_LINK = { primaryLinkUrl: "", primaryLinkLabel: "", secondaryLinks: [] };
 
-describe("tasks command — wait-on, set-ticket, and create taking both (#3388)", () => {
+const SINGULAR: Record<string, string> = {
+  tasks: "task",
+  calendarEvents: "calendarEvent",
+  people: "person",
+  companies: "company",
+  opportunities: "opportunity",
+  workspaceMembers: "workspaceMember",
+};
+
+describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
   let program: Command;
-  let store: Map<string, Stored>;
+  let store: Record<string, Map<string, Stored>>;
   let rendered: Record<string, unknown> | undefined;
   let updates: Array<[string, Record<string, unknown>]>;
   let creates: Array<[string, Record<string, unknown>]>;
+  let deletes: Array<[string, string]>;
 
   beforeEach(() => {
     program = new Command();
@@ -33,39 +46,85 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
     rendered = undefined;
     updates = [];
     creates = [];
-    store = new Map<string, Stored>([
-      [
-        "t1",
-        {
-          id: "t1",
-          title: "We owe the offer",
-          status: "TODO",
-          bodyV2: { markdown: NOTE },
-          waitsOnId: null,
-          ticket: "",
-        },
-      ],
-      [
-        "t2",
-        {
-          id: "t2",
-          title: "They owe the answer",
-          status: "TODO",
-          bodyV2: { markdown: NOTE },
-          waitsOnId: null,
-          ticket: "",
-        },
-      ],
-    ]);
+    deletes = [];
+    const task = (
+      id: string,
+      title: string,
+      extra: Record<string, unknown> = {},
+    ): [string, Stored] => [
+      id,
+      {
+        id,
+        title,
+        status: "TODO",
+        bodyV2: { markdown: NOTE },
+        dueAt: "2026-12-01T00:00:00.000Z",
+        waitsOnId: null,
+        waitsOnIssue: EMPTY_LINK,
+        ticket: "",
+        roomId: null,
+        ...extra,
+      },
+    ];
+    store = {
+      tasks: new Map([
+        task("t1", "We owe the offer"),
+        task("t2", "They owe the answer"),
+        task("roomed", "The agenda point", { roomId: "e1", dueAt: "2026-11-30T00:00:00.000Z" }),
+        task("done", "The answer, given", {
+          status: "DONE",
+          bodyV2: { markdown: `${NOTE}\n\n${CLOSED}` },
+        }),
+      ]),
+      calendarEvents: new Map([
+        [
+          "e1",
+          {
+            id: "e1",
+            title: "Check-in with Jhonatan",
+            startsAt: "2026-11-30T23:15:00.000Z",
+            deletedAt: null,
+          },
+        ],
+        [
+          "gone",
+          {
+            id: "gone",
+            title: "Deleted",
+            startsAt: "2026-11-30T09:00:00.000Z",
+            deletedAt: "2026-11-01T00:00:00.000Z",
+          },
+        ],
+      ]),
+      people: new Map([["p1", { id: "p1" }]]),
+      companies: new Map([
+        ["c1", { id: "c1" }],
+        ["c2", { id: "c2" }],
+      ]),
+      opportunities: new Map([["o1", { id: "o1" }]]),
+      workspaceMembers: new Map([["m1", { id: "m1" }]]),
+      taskTargets: new Map([["tt1", { id: "tt1", taskId: "t1", targetCompanyId: "c1" }]]),
+    };
     let next = 0;
-    const get = vi.fn(async (url: string) => {
-      const id = decodeURIComponent(url.replace("/rest/tasks/", ""));
-      const task = store.get(id);
-      if (!task)
-        throw Object.assign(new Error("Request failed with status code 404"), {
-          response: { status: 404 },
-        });
-      return { data: { data: { task: { ...task } } } };
+    const notFound = () =>
+      Object.assign(new Error("Request failed with status code 404"), {
+        response: { status: 404 },
+      });
+    const get = vi.fn(async (url: string, config?: { params?: { filter?: string } }) => {
+      if (url === "/rest/taskTargets") {
+        const taskId = config?.params?.filter?.replace("taskId[eq]:", "");
+        return {
+          data: {
+            data: {
+              taskTargets: [...store.taskTargets!.values()].filter((t) => t.taskId === taskId),
+            },
+          },
+        };
+      }
+      const [, , object, raw] = url.split("/");
+      const record = store[object!]?.get(decodeURIComponent(raw!));
+      if (!record) throw notFound();
+      return { data: { data: { [SINGULAR[object!]!]: { ...record } } } };
     });
     mockCreateCommandContext.mockReset();
     mockCreateCommandContext.mockResolvedValue({
@@ -75,15 +134,18 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
         records: {
           create: vi.fn(async (object: string, data: Record<string, unknown>) => {
             creates.push([object, data]);
-            if (object !== "tasks") return { id: `target-${next}` };
-            const id = `new-${++next}`;
-            store.set(id, { id, ...data });
+            const id = object === "tasks" ? `new-${++next}` : `target-${++next}`;
+            store[object]!.set(id, { id, ...data });
             return { id };
           }),
           update: vi.fn(async (_object: string, id: string, data: Record<string, unknown>) => {
             updates.push([id, data]);
-            store.set(id, { ...store.get(id)!, ...data });
-            return store.get(id);
+            store.tasks!.set(id, { ...store.tasks!.get(id)!, ...data });
+            return store.tasks!.get(id);
+          }),
+          delete: vi.fn(async (object: string, id: string) => {
+            deletes.push([object, id]);
+            store[object]!.delete(id);
           }),
         },
         output: {
@@ -105,10 +167,10 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
   };
 
   describe("wait-on", () => {
-    it("names the Task one waits on, writing that field alone, and reads it back with its title", async () => {
+    it("names the Task one waits on, clearing any issue in the same write, and reads it back with its title", async () => {
       await run("wait-on", "t1", "t2");
 
-      expect(updates).toEqual([["t1", { waitsOnId: "t2" }]]);
+      expect(updates).toEqual([["t1", { waitsOnId: "t2", waitsOnIssue: EMPTY_LINK }]]);
       expect(rendered).toMatchObject({
         id: "t1",
         waitsOn: { id: "t2", title: "They owe the answer" },
@@ -116,17 +178,39 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
       expect(rendered!.note).toBe(NOTE);
     });
 
-    it("clears it with --clear, and the Task reads back waiting on nothing", async () => {
-      store.get("t1")!.waitsOnId = "t2";
-      await run("wait-on", "t1", "--clear");
+    it("names a GitHub issue as owner/repo#N or its address, clearing any Task waited on", async () => {
+      await run("wait-on", "t1", "DaveX2001/claude-code-improvements#1341");
+      await run(
+        "wait-on",
+        "t2",
+        "https://github.com/DaveX2001/claude-code-improvements/issues/1341",
+      );
 
-      expect(updates).toEqual([["t1", { waitsOnId: null }]]);
-      expect(rendered).toMatchObject({ id: "t1", waitsOn: null });
+      const issue = {
+        primaryLinkUrl: "https://github.com/DaveX2001/claude-code-improvements/issues/1341",
+        primaryLinkLabel: "DaveX2001/claude-code-improvements#1341",
+        secondaryLinks: [],
+      };
+      expect(updates).toEqual([
+        ["t1", { waitsOnId: null, waitsOnIssue: issue }],
+        ["t2", { waitsOnId: null, waitsOnIssue: issue }],
+      ]);
+      expect(rendered).toMatchObject({
+        waitsOnIssue: { url: issue.primaryLinkUrl, label: issue.primaryLinkLabel },
+      });
     });
 
-    it("refuses a Task the instance does not hold, and writes nothing", async () => {
+    it("clears it with --clear, and the Task reads back waiting on nothing", async () => {
+      store.tasks!.get("t1")!.waitsOnId = "t2";
+      await run("wait-on", "t1", "--clear");
+
+      expect(updates).toEqual([["t1", { waitsOnId: null, waitsOnIssue: EMPTY_LINK }]]);
+      expect(rendered).toMatchObject({ id: "t1", waitsOn: null, waitsOnIssue: null });
+    });
+
+    it("refuses what is neither a Task nor an issue, and writes nothing", async () => {
       expect(await refusal("wait-on", "t1", "missing")).toContain(
-        "Task missing is not on the instance",
+        "missing is neither a Task on the instance nor a GitHub issue",
       );
       expect(updates).toEqual([]);
     });
@@ -148,7 +232,7 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
     });
 
     it("clears it with --clear, leaving the field empty", async () => {
-      store.get("t1")!.ticket = "19966";
+      store.tasks!.get("t1")!.ticket = "19966";
       await run("set-ticket", "t1", "--clear");
 
       expect(updates).toEqual([["t1", { ticket: "" }]]);
@@ -163,11 +247,171 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
     });
   });
 
+  describe("set-due", () => {
+    it("re-dates an open Task, writing its date alone", async () => {
+      await run("set-due", "t1", "2026-12-15");
+
+      expect(updates).toEqual([["t1", { dueAt: "2026-12-15T00:00:00.000Z" }]]);
+      expect(rendered).toMatchObject({ id: "t1", dueAt: "2026-12-15T00:00:00.000Z" });
+    });
+
+    it("refuses a Task whose room is booked, naming the room and its day, and writes nothing", async () => {
+      const message = await refusal("set-due", "roomed", "2026-12-15");
+      expect(message).toContain('"Check-in with Jhonatan" on 2026-12-01');
+      expect(message).toContain("calendar event e1");
+      expect(updates).toEqual([]);
+    });
+
+    it("re-dates a Task whose room's event is gone", async () => {
+      store.tasks!.get("roomed")!.roomId = "gone";
+      await run("set-due", "roomed", "2026-12-15");
+      expect(updates).toEqual([["roomed", { dueAt: "2026-12-15T00:00:00.000Z" }]]);
+    });
+
+    it("refuses a waiting Task, a malformed day, and a done Task", async () => {
+      store.tasks!.get("t1")!.waitsOnId = "t2";
+      expect(await refusal("set-due", "t1", "2026-12-15")).toContain("waits on Task t2");
+      expect(await refusal("set-due", "t2", "15.12.2026")).toContain("is not a day");
+      expect(await refusal("set-due", "done", "2026-12-15")).toContain(
+        "a closed Task allows one move",
+      );
+      expect(updates).toEqual([]);
+    });
+  });
+
+  describe("set-assignee", () => {
+    it("gives an open Task a new assignee, and clears it", async () => {
+      await run("set-assignee", "t1", "m1");
+      await run("set-assignee", "t2", "--clear");
+      expect(updates).toEqual([
+        ["t1", { assigneeId: "m1" }],
+        ["t2", { assigneeId: null }],
+      ]);
+    });
+
+    it("refuses a member the instance does not hold, and a done Task", async () => {
+      expect(await refusal("set-assignee", "t1", "nobody")).toContain(
+        "workspace member nobody is not on the instance",
+      );
+      expect(await refusal("set-assignee", "done", "m1")).toContain(
+        "a closed Task allows one move",
+      );
+      expect(updates).toEqual([]);
+    });
+  });
+
+  describe("set-room", () => {
+    it("gives an open Task its room, writing that field alone", async () => {
+      await run("set-room", "t1", "e1");
+      expect(updates).toEqual([["t1", { roomId: "e1" }]]);
+      expect(rendered).toMatchObject({
+        room: { id: "e1", title: "Check-in with Jhonatan", day: "2026-12-01" },
+      });
+    });
+
+    it("clears it, and refuses an event the instance does not hold or has deleted", async () => {
+      await run("set-room", "roomed", "--clear");
+      expect(updates).toEqual([["roomed", { roomId: null }]]);
+      expect(await refusal("set-room", "t1", "gone")).toContain(
+        "calendar event gone is not on the instance",
+      );
+      expect(await refusal("set-room", "t1", "missing")).toContain("is not on the instance");
+      expect(updates).toHaveLength(1);
+    });
+  });
+
+  describe("retarget", () => {
+    it("moves a Task from its Company onto an Opportunity: the new target written before the old one goes", async () => {
+      await run("retarget", "t1", "--add-opportunity", "o1", "--drop-company", "c1");
+
+      expect(creates).toEqual([["taskTargets", { taskId: "t1", targetOpportunityId: "o1" }]]);
+      expect(deletes).toEqual([["taskTargets", "tt1"]]);
+      expect(rendered!.targets).toEqual([
+        { kind: "opportunity", id: "o1", taskTargetId: expect.any(String) },
+      ]);
+    });
+
+    it("widens a Task to a second Company, keeping the first", async () => {
+      await run("retarget", "t1", "--add-company", "c2");
+
+      expect(deletes).toEqual([]);
+      expect(rendered!.targets).toEqual([
+        { kind: "company", id: "c1", taskTargetId: "tt1" },
+        { kind: "company", id: "c2", taskTargetId: expect.any(String) },
+      ]);
+    });
+
+    it("refuses a drop it is not aimed at, an add it already has or the instance lacks, and leaving none", async () => {
+      expect(await refusal("retarget", "t1", "--drop-company", "c2")).toContain(
+        "not aimed at company c2",
+      );
+      expect(await refusal("retarget", "t1", "--add-company", "c1")).toContain(
+        "already aimed at company c1",
+      );
+      expect(await refusal("retarget", "t1", "--add-person", "ghost")).toContain(
+        "person ghost is not on the instance",
+      );
+      expect(await refusal("retarget", "t1", "--drop-company", "c1")).toContain(
+        "would be aimed at none",
+      );
+      expect(await refusal("retarget", "t1")).toContain("name a target to add or to drop");
+      expect(creates).toEqual([]);
+      expect(deletes).toEqual([]);
+    });
+  });
+
+  describe("reopen", () => {
+    it("puts a done Task back to to do, its closing line kept as a dated line saying why", async () => {
+      await run("reopen", "done", "--why", "the reply was on another matter");
+
+      const line = `Closed 14.11 in error — reopened ${formatDayMonth(new Date())}: the reply was on another matter · proof was: [their reply 14.11](https://example.com/mail/reply)`;
+      expect(updates).toEqual([
+        ["done", { status: "TODO", bodyV2: { markdown: `${NOTE}\n\n${line}` } }],
+      ]);
+      expect(creates).toEqual([]);
+      expect(rendered).toMatchObject({ id: "done", status: "TODO" });
+    });
+
+    it("refuses without a reason, and on a Task that is not done", async () => {
+      expect(await refusal("reopen", "done")).toContain("does not say why");
+      expect(await refusal("reopen", "t1", "--why", "x")).toContain("is not done");
+      expect(updates).toEqual([]);
+    });
+
+    it("keeps the wrong close when the reopened Task's note is reshaped, and lets it close again", async () => {
+      await run("reopen", "done", "--why", "wrong reply");
+      const reopened = (store.tasks!.get("done")!.bodyV2 as { markdown: string }).markdown;
+      const kept = reopened.split("\n\n").pop()!;
+
+      await run(
+        "note",
+        "done",
+        "--rests-on",
+        "https://example.com/mail/new",
+        "--rests-on-label",
+        "the new ask",
+      );
+      expect((store.tasks!.get("done")!.bodyV2 as { markdown: string }).markdown).toBe(
+        `Rests on: [the new ask](https://example.com/mail/new)\n\n${kept}`,
+      );
+
+      await run(
+        "close",
+        "done",
+        "--proof",
+        "https://example.com/mail/right",
+        "--proof-label",
+        "the right reply",
+      );
+      expect(rendered).toMatchObject({ status: "DONE" });
+    });
+  });
+
   describe("create", () => {
     const base = [
       "create",
       "--title",
-      "They owe the answer to our offer",
+      "The answer to our offer",
       "--rests-on",
       "https://example.com/mail/abc",
       "--rests-on-label",
@@ -181,7 +425,7 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
     it("writes the next Task waiting on the act's Task and carrying the ticket, in the one write", async () => {
       await run(...base, "--waits-on", "t1", "--ticket", "19966");
 
-      const [object, data] = creates[0];
+      const [object, data] = creates[0]!;
       expect(object).toBe("tasks");
       expect(data).toMatchObject({ status: "TODO", waitsOnId: "t1", ticket: "19966" });
       expect(creates[1]).toEqual(["taskTargets", { taskId: "new-1", targetCompanyId: "c1" }]);
@@ -193,32 +437,72 @@ describe("tasks command — wait-on, set-ticket, and create taking both (#3388)"
       });
     });
 
-    it("writes neither field when neither is given", async () => {
-      await run(...base);
+    it("writes who owes it and its room in their own fields", async () => {
+      await run(...base, "--owes", "other-side", "--owes-person", "p1", "--room", "e1");
 
-      expect(creates[0][1]).not.toHaveProperty("waitsOnId");
-      expect(creates[0][1]).not.toHaveProperty("ticket");
-      expect(rendered).toMatchObject({ waitsOn: null, ticket: null });
+      expect(creates[0]![1]).toMatchObject({
+        title: "The answer to our offer",
+        owes: "OTHER_SIDE",
+        owesPersonId: "p1",
+        roomId: "e1",
+      });
+      expect(rendered).toMatchObject({
+        owes: "OTHER_SIDE",
+        owesPersonId: "p1",
+        room: { id: "e1" },
+      });
     });
 
-    it("refuses a waits-on naming a Task that does not exist, and writes nothing", async () => {
+    it("writes none of the optional fields when none is given", async () => {
+      await run(...base);
+
+      for (const field of ["waitsOnId", "ticket", "owes", "owesPersonId", "roomId"]) {
+        expect(creates[0]![1]).not.toHaveProperty(field);
+      }
+      expect(rendered).toMatchObject({ waitsOn: null, ticket: null, owes: null, room: null });
+    });
+
+    it("refuses a waits-on, a Person or a room the instance does not hold, and writes nothing", async () => {
       expect(await refusal(...base, "--waits-on", "missing")).toContain(
-        "--waits-on names Task missing, which is not on the instance; nothing was written",
+        "--waits-on names Task missing, which is not on the instance",
+      );
+      expect(await refusal(...base, "--owes", "other-side", "--owes-person", "ghost")).toContain(
+        "--owes-person names Person ghost",
+      );
+      expect(await refusal(...base, "--room", "gone")).toContain(
+        "--room names calendar event gone",
       );
       expect(creates).toEqual([]);
     });
 
-    it("refuses a blank ticket or waits-on before reaching the instance", async () => {
+    it("refuses a blank ticket or waits-on, an unknown side, a Person without the other side, and a room with a date", async () => {
       expect(await refusal(...base, "--ticket", " ")).toContain("the ticket is empty");
       expect(await refusal(...base, "--waits-on", " ")).toContain("--waits-on is empty");
+      expect(await refusal(...base, "--owes", "us")).toContain("neither house nor other-side");
+      expect(await refusal(...base, "--owes-person", "p1")).toContain(
+        "pass --owes other-side with it",
+      );
+      expect(await refusal(...base, "--room", "e1", "--due", "2026-12-01")).toContain("not both");
       expect(creates).toEqual([]);
     });
   });
 
-  it("lists wait-on and set-ticket, with their arguments, in tasks --help", () => {
+  it("lists every move, noun then verb, in tasks --help", () => {
     const tasks = program.commands.find((c) => c.name() === "tasks")!;
     const help = tasks.helpInformation();
-    expect(help).toMatch(/wait-on \[options\] <id> \[waitsOnId\]/);
-    expect(help).toMatch(/set-ticket \[options\] <id> \[ticket\]/);
+    for (const verb of [
+      "create",
+      "note",
+      "close",
+      "reopen \\[options\\] <id>",
+      "set-due \\[options\\] <id> <date>",
+      "set-assignee \\[options\\] <id> \\[workspaceMemberId\\]",
+      "wait-on \\[options\\] <id> \\[waitsOn\\]",
+      "set-ticket \\[options\\] <id> \\[ticket\\]",
+      "set-room \\[options\\] <id> \\[calendarEventId\\]",
+      "retarget \\[options\\] <id>",
+    ]) {
+      expect(help).toMatch(new RegExp(verb));
+    }
   });
 });
