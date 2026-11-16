@@ -80,6 +80,15 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
   forms, `graphql`, `raw rest`, `raw graphql`, `mcp exec` — through a guard in the HTTP
   transport (`packages/twenty-sdk/src/cli/utilities/house-rules/`) that refuses the write
   before it leaves the machine and names what is missing.
+- `twenty tasks` carries every move A Task's Life Part 5 allows (DaveX2001/claude-code-improvements#1341),
+  each a command named noun then verb and listed in `twenty tasks --help`: on an open Task
+  `set-due` (refused on a Task whose room is booked, naming the room), `set-assignee`,
+  `wait-on` (a Task or a GitHub issue), `set-ticket`, `set-room` and `retarget` (targets moved
+  or widened); on a closed one `reopen --why`, which puts the same Task back to to do and keeps
+  the wrong close in its note as `Closed DD.MM in error — reopened DD.MM: why · proof was: …`.
+  `tasks create` takes `--owes`, `--owes-person` and `--room`. A closed Task refuses every
+  move but the reopen, and the guard lets a done Task's note be rewritten by its reopening
+  alone — the rule the store holds in crm-2990-twenty `sql/house-shape.sql`.
 
 ## Building and installing from source
 

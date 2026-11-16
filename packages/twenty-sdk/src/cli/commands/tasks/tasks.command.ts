@@ -9,11 +9,17 @@ import {
   isAddress,
   labelProblem,
   parseIssueRef,
+  reasonProblem,
+  reopenLines,
+  reopenNote,
   type IssueRef,
 } from "../../utilities/house-rules/task-note";
 import { REFUSED } from "../../utilities/house-rules/write-guard";
 import { createCommandContext } from "../../utilities/shared/context";
 import { applyGlobalOptions } from "../../utilities/shared/global-options";
+
+type Services = Awaited<ReturnType<typeof createCommandContext>>["services"];
+type GlobalOptions = Awaited<ReturnType<typeof createCommandContext>>["globalOptions"];
 
 interface TaskCreateOptions {
   title?: string;
@@ -26,6 +32,9 @@ interface TaskCreateOptions {
   assignee?: string;
   waitsOn?: string;
   ticket?: string;
+  owes?: string;
+  owesPerson?: string;
+  room?: string;
 }
 
 interface TaskNoteOptions {
@@ -43,14 +52,57 @@ interface TaskClearOptions {
   clear?: boolean;
 }
 
+interface TaskRetargetOptions {
+  addCompany?: string[];
+  addOpportunity?: string[];
+  addPerson?: string[];
+  dropCompany?: string[];
+  dropOpportunity?: string[];
+  dropPerson?: string[];
+}
+
+type LinkValue = { primaryLinkUrl?: string | null; primaryLinkLabel?: string | null } | null;
+
 type TaskRecord = {
   id: string;
   status?: string;
   title?: string;
   bodyV2?: { markdown?: string };
+  dueAt?: string | null;
+  assigneeId?: string | null;
   waitsOnId?: string | null;
+  waitsOnIssue?: LinkValue;
   ticket?: string | null;
+  owes?: string | null;
+  owesPersonId?: string | null;
+  roomId?: string | null;
 };
+
+type TaskTarget = {
+  id: string;
+  taskId?: string;
+  targetCompanyId?: string | null;
+  targetOpportunityId?: string | null;
+  targetPersonId?: string | null;
+};
+
+type CalendarEvent = {
+  id: string;
+  title?: string | null;
+  startsAt?: string | null;
+  deletedAt?: string | null;
+};
+
+/** The records a Task can be aimed at, as the target fields and REST paths name them. */
+const TARGET_KINDS = [
+  { kind: "company", field: "targetCompanyId", rest: "companies" },
+  { kind: "opportunity", field: "targetOpportunityId", rest: "opportunities" },
+  { kind: "person", field: "targetPersonId", rest: "people" },
+] as const;
+type TargetKind = (typeof TARGET_KINDS)[number]["kind"];
+
+const OWES: Record<string, string> = { house: "HOUSE", "other-side": "OTHER_SIDE" };
+const EMPTY_LINK = { primaryLinkUrl: "", primaryLinkLabel: "", secondaryLinks: [] };
 
 function refuse(missing: string[], { afterRead = false } = {}): never {
   throw new CliError(
@@ -58,6 +110,8 @@ function refuse(missing: string[], { afterRead = false } = {}): never {
     REFUSED,
   );
 }
+
+const collect = (value: string, previous: string[] = []) => [...previous, value];
 
 /**
  * The open note's parts as the operator passed them: what is missing or malformed is
@@ -84,44 +138,63 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
 }
 
 /**
- * `twenty tasks create` / `note` / `close` — the Task note in one shape, written by the
- * tool rather than typed out by the operator (#3266, #3276). `create` emits an open note
- * from the address the Task rests on and the issue it sits on; `note` rewrites an open
- * Task's note into that shape, replacing whatever it held, and refuses a Task already
- * done so no closed Task loses its proof line; `close` appends the proof line, dated
- * today, and sets the Task done. Each re-reads the Task from the instance after the write
- * and prints what is stored. Whatever route a write takes, the transport's guard
- * (`utilities/house-rules/write-guard.ts`) refuses a note outside this shape.
+ * `twenty tasks` — the Task as A Task's Life Part 5 gives it: the note in the house's one
+ * shape, and one command for every move the record allows (CCI#1341). The help lists them
+ * all, so no move goes through the raw API.
  *
- * `wait-on` / `set-ticket` — the Task's two fields from #3387, each with a command of its
- * own (#3388): `wait-on` names the Task this one waits on (`waitsOnId`, a Task→Task
- * relation) or clears it, `set-ticket` sets or clears its ticket at the counterparty
- * (`ticket`, text). Each writes that one field and nothing else. `create` takes both, so a
- * session staging an act writes the act's Task and the next one waiting on it in two
- * `create`s and no further write; a waits-on naming a Task the instance does not hold is
- * refused before anything is written.
+ *   create        write an open Task: its note (#3266), what it waits on and its ticket
+ *                 (#3388), who owes it and its room (CCI#1341)
+ *   note          rewrite an open Task's note into the one shape (#3276)
+ *   close         mark it done, its note ending in the dated proof line
+ *
+ * The six moves an open Task allows, each writing its own fields and nothing else:
+ *
+ *   set-due       a new date — refused on a Task whose room is booked (its date follows the
+ *                 room's event; the refusal names the room) and on a Task that waits
+ *   set-assignee  a new assignee, the workspace member who acts
+ *   wait-on       the Task or the GitHub issue it waits on; the store clears its date
+ *   set-ticket    its ticket at the counterparty
+ *   set-room      its room, a synced calendar event; the store dates it on the event's day
+ *   retarget      its targets: moved from one record onto another, or widened
+ *
+ * And the one move a closed Task allows:
+ *
+ *   reopen        a close made in error undone on the same Task — back to to do, the closing
+ *                 line kept as a dated line saying it was made in error and why
+ *
+ * Every move refuses a Task that is done (Part 5: "no other move touches a closed Task")
+ * and a record the instance does not hold, before anything is written; each re-reads the
+ * Task after the write and prints what is stored. Whatever route a write takes, the
+ * transport's guard (`utilities/house-rules/write-guard.ts`) refuses a note outside the
+ * shape, and the store beneath Twenty holds the same rules (crm-2990-twenty `sql/`).
  */
 export function registerTasksCommand(program: Command): void {
   const tasks = program
     .command("tasks")
     .description(
-      "Tasks with their note in the house's one shape, the Task each waits on, and its ticket",
+      "Tasks with their note in the house's one shape, and every move a Task allows: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and reopen",
     );
   applyGlobalOptions(tasks);
 
   const create = tasks
     .command("create")
     .description("Write an open Task on a Company or an Opportunity, its note in the one shape")
-    .option("--title <text>", "Who owes what, in one line")
+    .option(
+      "--title <text>",
+      "What is owed, in one line — who owes it and its room go in their own flags",
+    )
     .option("--rests-on <address>", "Address of the mail or recording the Task rests on")
     .option("--rests-on-label <text>", "What that artifact is, in a few words")
     .option("--issue <ref>", "The GitHub issue the work sits on: owner/repo#N, #N or its URL")
     .option("--company <id>", "The Company the Task is on")
     .option("--opportunity <id>", "The Opportunity the Task is on")
-    .option("--due <date>", "Due date (ISO 8601)")
+    .option("--due <date>", "Due date (ISO 8601); not with --room, whose event gives the date")
     .option("--assignee <workspaceMemberId>", "Who acts")
     .option("--waits-on <taskId>", "The Task this one waits on (it must exist)")
-    .option("--ticket <number>", "Its ticket at the counterparty, e.g. 19966");
+    .option("--ticket <number>", "Its ticket at the counterparty, e.g. 19966")
+    .option("--owes <side>", "Who owes it: house or other-side")
+    .option("--owes-person <personId>", "Who there owes it, a Person on the other side")
+    .option("--room <calendarEventId>", "The room it waits for, a synced calendar event");
   applyGlobalOptions(create);
 
   create.action(async (_options: unknown, command: Command) => {
@@ -129,7 +202,7 @@ export function registerTasksCommand(program: Command): void {
     const options = command.opts() as TaskCreateOptions;
 
     const missing: string[] = [];
-    if (!options.title?.trim()) missing.push("the Task has no title — pass --title, who owes what");
+    if (!options.title?.trim()) missing.push("the Task has no title — pass --title, what is owed");
     const markdown = openNoteFrom(options, missing);
     if (!options.company === !options.opportunity) {
       missing.push("a Task stands on one record — pass exactly one of --company or --opportunity");
@@ -139,15 +212,33 @@ export function registerTasksCommand(program: Command): void {
     if (options.waitsOn !== undefined && !waitsOn) {
       missing.push("--waits-on is empty — pass the id of the Task this one waits on");
     }
-    if (missing.length > 0) refuse(missing);
-    if (waitsOn && !(await findTask(services, waitsOn))) {
-      refuse(
-        [`--waits-on names Task ${waitsOn}, which is not on the instance; nothing was written`],
-        {
-          afterRead: true,
-        },
-      );
+    const owes = options.owes === undefined ? undefined : owesFrom(options.owes, missing);
+    const owesPerson = options.owesPerson?.trim();
+    if (options.owesPerson !== undefined && !owesPerson) {
+      missing.push("--owes-person is empty — pass the id of the Person who owes it");
     }
+    if (owesPerson && owes !== "OTHER_SIDE") {
+      missing.push("--owes-person names who there owes it — pass --owes other-side with it");
+    }
+    const room = options.room?.trim();
+    if (options.room !== undefined && !room)
+      missing.push("--room is empty — pass the calendar event's id");
+    if (room && options.due) {
+      missing.push("a Task with a room is due on the room's day — pass --room or --due, not both");
+    }
+    if (missing.length > 0) refuse(missing);
+
+    const absent: string[] = [];
+    if (waitsOn && !(await findTask(services, waitsOn))) {
+      absent.push(`--waits-on names Task ${waitsOn}, which is not on the instance`);
+    }
+    if (owesPerson && !(await findRecord(services, "people", owesPerson))) {
+      absent.push(`--owes-person names Person ${owesPerson}, which is not on the instance`);
+    }
+    if (room && !(await findEvent(services, room))) {
+      absent.push(`--room names calendar event ${room}, which is not on the instance`);
+    }
+    if (absent.length > 0) refuse([...absent, "nothing was written"], { afterRead: true });
 
     const data: Record<string, unknown> = {
       title: options.title!.trim(),
@@ -158,6 +249,9 @@ export function registerTasksCommand(program: Command): void {
     if (options.assignee) data.assigneeId = options.assignee;
     if (waitsOn) data.waitsOnId = waitsOn;
     if (ticket !== undefined) data.ticket = ticket;
+    if (owes) data.owes = owes;
+    if (owesPerson) data.owesPersonId = owesPerson;
+    if (room) data.roomId = room;
 
     const created = (await services.records.create("tasks", data)) as TaskRecord;
     await services.records.create("taskTargets", {
@@ -196,7 +290,11 @@ export function registerTasksCommand(program: Command): void {
       ]);
     }
 
-    await services.records.update("tasks", id, { bodyV2: { markdown: markdown! } });
+    // A close made in error stays in the note, whatever else is rewritten (CCI#1341).
+    const kept = reopenLines(stored.bodyV2?.markdown);
+    await services.records.update("tasks", id, {
+      bodyV2: { markdown: [markdown!, ...kept].join("\n\n") },
+    });
 
     await renderStored(services, id, globalOptions);
   });
@@ -248,35 +346,169 @@ export function registerTasksCommand(program: Command): void {
     await renderStored(services, id, globalOptions);
   });
 
-  const waitOn = tasks
-    .command("wait-on")
-    .description("Name the Task this Task waits on, or clear it with --clear")
-    .argument("<id>", "The Task that waits")
-    .argument("[waitsOnId]", "The Task it waits on")
-    .option("--clear", "Clear it: the Task waits on nothing");
-  applyGlobalOptions(waitOn);
+  const reopen = tasks
+    .command("reopen")
+    .description(
+      "Undo a close made in error on the same Task: back to to do, the wrong close kept in its note as a dated line saying why",
+    )
+    .argument("<id>", "The done Task's id")
+    .option("--why <reason>", "Why the close was made in error, in one line");
+  applyGlobalOptions(reopen);
 
-  waitOn.action(
-    async (id: string, waitsOnId: string | undefined, _options: unknown, command: Command) => {
+  reopen.action(async (id: string, _options: unknown, command: Command) => {
+    const { globalOptions, services } = await createCommandContext(command);
+    const { why } = command.opts() as { why?: string };
+
+    const reason = reasonProblem(why);
+    if (reason) refuse([reason, `Task ${id} is unchanged`]);
+
+    const stored = await readTask(services, id);
+    if (stored.status !== "DONE") {
+      refuse([`Task ${id} is not done — there is no close to undo; it is unchanged`], {
+        afterRead: true,
+      });
+    }
+    const reopened = reopenNote(stored.bodyV2?.markdown ?? "", why!);
+    if (!reopened.markdown) {
+      refuse([...reopened.problems, `Task ${id} is unchanged`], { afterRead: true });
+    }
+
+    await services.records.update("tasks", id, {
+      status: "TODO",
+      bodyV2: { markdown: reopened.markdown! },
+    });
+
+    await renderStored(services, id, globalOptions);
+  });
+
+  const setDue = tasks
+    .command("set-due")
+    .description(
+      "Give an open Task a new date — refused on a Task whose room is booked, since its date follows the room's event",
+    )
+    .argument("<id>", "The Task's id")
+    .argument("<date>", "The new day, YYYY-MM-DD");
+  applyGlobalOptions(setDue);
+
+  setDue.action(async (id: string, date: string, _options: unknown, command: Command) => {
+    const { globalOptions, services } = await createCommandContext(command);
+
+    const day = date.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(`${day}T00:00:00Z`))) {
+      refuse([`"${date}" is not a day — pass YYYY-MM-DD; Task ${id} is unchanged`]);
+    }
+
+    const stored = await openTask(services, id);
+    const wait = waitOf(stored);
+    if (wait) {
+      refuse(
+        [
+          `Task ${id} waits on ${wait} and carries no date while it waits — clear the wait with twenty tasks wait-on ${id} --clear first; it is unchanged`,
+        ],
+        { afterRead: true },
+      );
+    }
+    if (stored.roomId) {
+      const event = await findEvent(services, stored.roomId);
+      const roomDay = event ? berlinDay(event.startsAt) : undefined;
+      if (event && roomDay) {
+        refuse(
+          [
+            `Task ${id}'s date follows its room, "${event.title ?? "(untitled)"}" on ${roomDay} (calendar event ${event.id}) — move the event, or carry the Task to another room with twenty tasks set-room; nothing was written`,
+          ],
+          { afterRead: true },
+        );
+      }
+    }
+
+    await services.records.update("tasks", id, { dueAt: `${day}T00:00:00.000Z` });
+
+    await renderStored(services, id, globalOptions);
+  });
+
+  const setAssignee = tasks
+    .command("set-assignee")
+    .description(
+      "Give an open Task a new assignee, the workspace member who acts, or clear it with --clear",
+    )
+    .argument("<id>", "The Task's id")
+    .argument("[workspaceMemberId]", "The workspace member who acts")
+    .option("--clear", "Clear it: nobody at the house is named");
+  applyGlobalOptions(setAssignee);
+
+  setAssignee.action(
+    async (id: string, memberArg: string | undefined, _options: unknown, command: Command) => {
       const { globalOptions, services } = await createCommandContext(command);
       const options = command.opts() as TaskClearOptions;
 
-      const target = waitsOnId?.trim() || undefined;
-      if (!!options.clear === !!target) {
+      const member = memberArg?.trim() || undefined;
+      if (!!options.clear === !!member) {
         refuse([
-          `pass either the Task ${id} waits on or --clear, not ${options.clear ? "both" : "neither"}; Task ${id} is unchanged`,
+          `pass either the workspace member or --clear, not ${options.clear ? "both" : "neither"}; Task ${id} is unchanged`,
         ]);
       }
-      if (target === id) refuse([`Task ${id} cannot wait on itself; it is unchanged`]);
 
-      await readTask(services, id);
-      if (target && !(await findTask(services, target))) {
-        refuse([`Task ${target} is not on the instance; Task ${id} is unchanged`], {
+      await openTask(services, id);
+      if (member && !(await findRecord(services, "workspaceMembers", member))) {
+        refuse([`workspace member ${member} is not on the instance; Task ${id} is unchanged`], {
           afterRead: true,
         });
       }
 
-      await services.records.update("tasks", id, { waitsOnId: target ?? null });
+      await services.records.update("tasks", id, { assigneeId: member ?? null });
+
+      await renderStored(services, id, globalOptions);
+    },
+  );
+
+  const waitOn = tasks
+    .command("wait-on")
+    .description(
+      "Name the Task or GitHub issue this Task waits on, which clears its date, or clear the wait with --clear",
+    )
+    .argument("<id>", "The Task that waits")
+    .argument(
+      "[waitsOn]",
+      "The Task it waits on (its id), or a GitHub issue: owner/repo#N or its URL",
+    )
+    .option("--clear", "Clear it: the Task waits on nothing");
+  applyGlobalOptions(waitOn);
+
+  waitOn.action(
+    async (id: string, waitsOnArg: string | undefined, _options: unknown, command: Command) => {
+      const { globalOptions, services } = await createCommandContext(command);
+      const options = command.opts() as TaskClearOptions;
+
+      const target = waitsOnArg?.trim() || undefined;
+      if (!!options.clear === !!target) {
+        refuse([
+          `pass either the Task or issue ${id} waits on or --clear, not ${options.clear ? "both" : "neither"}; Task ${id} is unchanged`,
+        ]);
+      }
+      if (target === id) refuse([`Task ${id} cannot wait on itself; it is unchanged`]);
+      const issue = target ? waitIssueFrom(target) : undefined;
+
+      await openTask(services, id);
+      if (target && !issue && !(await findTask(services, target))) {
+        refuse(
+          [
+            `${target} is neither a Task on the instance nor a GitHub issue (owner/repo#N or its URL); Task ${id} is unchanged`,
+          ],
+          { afterRead: true },
+        );
+      }
+
+      // One wait at a time: naming one clears the other in the same write.
+      await services.records.update("tasks", id, {
+        waitsOnId: target && !issue ? target : null,
+        waitsOnIssue: issue
+          ? {
+              primaryLinkUrl: `https://github.com/${issue.owner}/${issue.repo}/issues/${issue.number}`,
+              primaryLinkLabel: `${issue.owner}/${issue.repo}#${issue.number}`,
+              secondaryLinks: [],
+            }
+          : EMPTY_LINK,
+      });
 
       await renderStored(services, id, globalOptions);
     },
@@ -304,12 +536,125 @@ export function registerTasksCommand(program: Command): void {
       const ticket = ticketArg === undefined ? "" : ticketFrom(ticketArg, missing);
       if (missing.length > 0) refuse([...missing, `Task ${id} is unchanged`]);
 
-      await readTask(services, id);
+      await openTask(services, id);
       await services.records.update("tasks", id, { ticket });
 
       await renderStored(services, id, globalOptions);
     },
   );
+
+  const setRoom = tasks
+    .command("set-room")
+    .description(
+      "Give an open Task its room, a synced calendar event whose day becomes its date, or clear it with --clear",
+    )
+    .argument("<id>", "The Task's id")
+    .argument("[calendarEventId]", "The room's calendar event")
+    .option("--clear", "Clear it: the Task keeps the day it last had");
+  applyGlobalOptions(setRoom);
+
+  setRoom.action(
+    async (id: string, eventArg: string | undefined, _options: unknown, command: Command) => {
+      const { globalOptions, services } = await createCommandContext(command);
+      const options = command.opts() as TaskClearOptions;
+
+      const event = eventArg?.trim() || undefined;
+      if (!!options.clear === !!event) {
+        refuse([
+          `pass either the calendar event or --clear, not ${options.clear ? "both" : "neither"}; Task ${id} is unchanged`,
+        ]);
+      }
+
+      await openTask(services, id);
+      if (event && !(await findEvent(services, event))) {
+        refuse([`calendar event ${event} is not on the instance; Task ${id} is unchanged`], {
+          afterRead: true,
+        });
+      }
+
+      await services.records.update("tasks", id, { roomId: event ?? null });
+
+      await renderStored(services, id, globalOptions);
+    },
+  );
+
+  const retarget = tasks
+    .command("retarget")
+    .description(
+      "Move an open Task's targets from one record onto another, or widen it to another record the same act serves",
+    )
+    .argument("<id>", "The Task's id")
+    .option("--add-company <id>", "Aim it at this Company too (repeatable)", collect)
+    .option("--add-opportunity <id>", "Aim it at this Opportunity too (repeatable)", collect)
+    .option("--add-person <id>", "Aim it at this Person too (repeatable)", collect)
+    .option("--drop-company <id>", "Take this Company off its targets (repeatable)", collect)
+    .option(
+      "--drop-opportunity <id>",
+      "Take this Opportunity off its targets (repeatable)",
+      collect,
+    )
+    .option("--drop-person <id>", "Take this Person off its targets (repeatable)", collect);
+  applyGlobalOptions(retarget);
+
+  retarget.action(async (id: string, _options: unknown, command: Command) => {
+    const { globalOptions, services } = await createCommandContext(command);
+    const options = command.opts() as TaskRetargetOptions;
+
+    const adds: Array<{ kind: TargetKind; id: string }> = [];
+    const drops: Array<{ kind: TargetKind; id: string }> = [];
+    for (const { kind } of TARGET_KINDS) {
+      const cap = kind[0]!.toUpperCase() + kind.slice(1);
+      for (const value of options[`add${cap}` as keyof TaskRetargetOptions] ?? []) {
+        adds.push({ kind, id: value.trim() });
+      }
+      for (const value of options[`drop${cap}` as keyof TaskRetargetOptions] ?? []) {
+        drops.push({ kind, id: value.trim() });
+      }
+    }
+    const missing: string[] = [];
+    if (adds.length + drops.length === 0) {
+      missing.push(
+        "name a target to add or to drop — --add-company, --add-opportunity, --add-person, --drop-company, --drop-opportunity or --drop-person",
+      );
+    }
+    if ([...adds, ...drops].some((t) => !t.id)) missing.push("a target id is empty");
+    if (missing.length > 0) refuse([...missing, `Task ${id} is unchanged`]);
+
+    await openTask(services, id);
+    const targets = await listTargets(services, id);
+    const fieldOf = (kind: TargetKind) => TARGET_KINDS.find((k) => k.kind === kind)!.field;
+    const holding = (t: { kind: TargetKind; id: string }) =>
+      targets.find((target) => target[fieldOf(t.kind)] === t.id);
+
+    const problems: string[] = [];
+    for (const drop of drops) {
+      if (!holding(drop)) problems.push(`Task ${id} is not aimed at ${drop.kind} ${drop.id}`);
+    }
+    for (const add of adds) {
+      if (holding(add)) {
+        problems.push(`Task ${id} is already aimed at ${add.kind} ${add.id}`);
+      } else {
+        const rest = TARGET_KINDS.find((k) => k.kind === add.kind)!.rest;
+        if (!(await findRecord(services, rest, add.id))) {
+          problems.push(`${add.kind} ${add.id} is not on the instance`);
+        }
+      }
+    }
+    if (targets.length - drops.length + adds.length < 1) {
+      problems.push(`a Task stands on at least one record — Task ${id} would be aimed at none`);
+    }
+    if (problems.length > 0) refuse([...problems, `Task ${id} is unchanged`], { afterRead: true });
+
+    // Adds first, so the Task is never aimed at nothing between two writes.
+    for (const add of adds) {
+      await services.records.create("taskTargets", { taskId: id, [fieldOf(add.kind)]: add.id });
+    }
+    for (const drop of drops) {
+      await services.records.delete("taskTargets", holding(drop)!.id);
+    }
+
+    await renderStored(services, id, globalOptions);
+  });
 }
 
 /** The ticket as it will be stored, trimmed; a blank one is pushed onto `missing`. */
@@ -319,16 +664,54 @@ function ticketFrom(raw: string, missing: string[]): string {
   return ticket;
 }
 
-/** The Task as stored, or undefined when the instance holds none by that id. */
-async function findTask(
-  services: Awaited<ReturnType<typeof createCommandContext>>["services"],
+/** `house` or `other-side` as the field stores it; anything else is pushed onto `missing`. */
+function owesFrom(raw: string, missing: string[]): string | undefined {
+  const owes = OWES[raw.trim().toLowerCase()];
+  if (!owes) missing.push(`--owes "${raw}" is neither house nor other-side`);
+  return owes;
+}
+
+/** A GitHub issue a Task waits on: owner/repo#N or its github.com address, never a bare N. */
+function waitIssueFrom(value: string): IssueRef | undefined {
+  if (!/^(https:\/\/github\.com\/|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+$)/.test(value)) {
+    return undefined;
+  }
+  return parseIssueRef(value);
+}
+
+/** What a Task waits on, as a reader names it, or undefined when it waits on nothing. */
+function waitOf(task: TaskRecord): string | undefined {
+  if (task.waitsOnId) return `Task ${task.waitsOnId}`;
+  const url = task.waitsOnIssue?.primaryLinkUrl;
+  if (url) return task.waitsOnIssue?.primaryLinkLabel || url;
+  return undefined;
+}
+
+/** The Europe/Berlin calendar day of an instant, YYYY-MM-DD; the house's day (Part 3). */
+function berlinDay(instant: string | null | undefined): string | undefined {
+  if (!instant) return undefined;
+  const date = new Date(instant);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Berlin",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/** One record by its REST path and id, or undefined when the instance holds none. */
+async function findRecord(
+  services: Services,
+  rest: string,
   id: string,
-): Promise<TaskRecord | undefined> {
+): Promise<Record<string, unknown> | undefined> {
   try {
-    const response = await services.api.get<{ data?: { task?: TaskRecord } }>(
-      `/rest/tasks/${encodeURIComponent(id)}`,
+    const response = await services.api.get<{ data?: Record<string, unknown> }>(
+      `/rest/${rest}/${encodeURIComponent(id)}`,
     );
-    return response.data?.data?.task ?? undefined;
+    const record = Object.values(response.data?.data ?? {})[0];
+    return record && typeof record === "object" ? (record as Record<string, unknown>) : undefined;
   } catch (error) {
     const status = (error as { response?: { status?: number } }).response?.status;
     if (status === 404 || status === 400) return undefined;
@@ -336,33 +719,86 @@ async function findTask(
   }
 }
 
-async function readTask(
-  services: Awaited<ReturnType<typeof createCommandContext>>["services"],
-  id: string,
-): Promise<TaskRecord> {
-  const response = await services.api.get<{ data?: { task?: TaskRecord } }>(
-    `/rest/tasks/${encodeURIComponent(id)}`,
-  );
-  const task = response.data?.data?.task;
+/** The Task as stored, or undefined when the instance holds none by that id. */
+async function findTask(services: Services, id: string): Promise<TaskRecord | undefined> {
+  return (await findRecord(services, "tasks", id)) as TaskRecord | undefined;
+}
+
+/** A calendar event the instance holds and has not deleted, or undefined. */
+async function findEvent(services: Services, id: string): Promise<CalendarEvent | undefined> {
+  const event = (await findRecord(services, "calendarEvents", id)) as CalendarEvent | undefined;
+  return event && !event.deletedAt ? event : undefined;
+}
+
+async function readTask(services: Services, id: string): Promise<TaskRecord> {
+  const task = await findTask(services, id);
   if (!task) throw new CliError(`No Task ${id} on the instance.`, "INVALID_ARGUMENTS");
   return task;
 }
 
+/** The Task, refused when it is done: a closed Task allows its reopening and nothing else. */
+async function openTask(services: Services, id: string): Promise<TaskRecord> {
+  const task = await readTask(services, id);
+  if (task.status === "DONE") {
+    refuse(
+      [
+        `Task ${id} is done — a closed Task allows one move, its reopening (twenty tasks reopen ${id} --why <reason>); it is unchanged`,
+      ],
+      { afterRead: true },
+    );
+  }
+  return task;
+}
+
+async function listTargets(services: Services, taskId: string): Promise<TaskTarget[]> {
+  const response = await services.api.get<{ data?: { taskTargets?: TaskTarget[] } }>(
+    `/rest/taskTargets`,
+    { params: { filter: `taskId[eq]:${taskId}`, limit: 200 } },
+  );
+  return response.data?.data?.taskTargets ?? [];
+}
+
 /** Print the Task as the instance now stores it — a fresh read, never the write's echo. */
 async function renderStored(
-  services: Awaited<ReturnType<typeof createCommandContext>>["services"],
+  services: Services,
   id: string,
-  globalOptions: Awaited<ReturnType<typeof createCommandContext>>["globalOptions"],
+  globalOptions: GlobalOptions,
 ): Promise<void> {
   const task = await readTask(services, id);
   const waitsOn = task.waitsOnId ? await findTask(services, task.waitsOnId) : undefined;
+  const room = task.roomId ? await findEvent(services, task.roomId) : undefined;
+  const targets = await listTargets(services, id);
   await services.output.render(
     {
       id: task.id,
       title: task.title,
       status: task.status,
+      dueAt: task.dueAt ?? null,
+      assigneeId: task.assigneeId ?? null,
+      owes: task.owes ?? null,
+      owesPersonId: task.owesPersonId ?? null,
+      room: task.roomId
+        ? {
+            id: task.roomId,
+            title: room?.title ?? null,
+            startsAt: room?.startsAt ?? null,
+            day: berlinDay(room?.startsAt) ?? null,
+          }
+        : null,
       waitsOn: task.waitsOnId ? { id: task.waitsOnId, title: waitsOn?.title ?? null } : null,
+      waitsOnIssue: task.waitsOnIssue?.primaryLinkUrl
+        ? {
+            url: task.waitsOnIssue.primaryLinkUrl,
+            label: task.waitsOnIssue.primaryLinkLabel ?? null,
+          }
+        : null,
       ticket: task.ticket || null,
+      targets: targets.map((target) => {
+        const kind = TARGET_KINDS.find((k) => target[k.field]);
+        return kind
+          ? { kind: kind.kind, id: target[kind.field] as string, taskTargetId: target.id }
+          : { kind: "other", id: null, taskTargetId: target.id };
+      }),
       note: task.bodyV2?.markdown ?? null,
     },
     { format: globalOptions.output, query: globalOptions.query },

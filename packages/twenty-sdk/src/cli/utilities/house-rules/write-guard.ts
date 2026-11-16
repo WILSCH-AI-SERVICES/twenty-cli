@@ -13,7 +13,9 @@
  *     written with no note at all;
  *   - a Task done whose note does not end in its proof line, dated the day of the close;
  *   - a Task already done whose note is rewritten, or which is moved off DONE with its
- *     proof line still standing (#3276) — no closed Task loses its proof;
+ *     proof line still standing (#3276) — no closed Task loses its proof — save its
+ *     reopening, which moves it off DONE and turns the closing line alone into the dated
+ *     line saying the close was made in error and why (CCI#1341, `reopeningProblems`);
  *   - an Opportunity at CLOSED_WON or CLOSED_LOST whose `whyStopped` carries no address,
  *     including one created already closed.
  *
@@ -30,7 +32,7 @@
 import { Kind, parse, valueFromASTUntyped, type DocumentNode, type ValueNode } from "graphql";
 
 import { CliError } from "../errors/cli-error";
-import { checkTaskNote, isAddress, todaysDayMonths } from "./task-note";
+import { checkTaskNote, isAddress, reopeningProblems, todaysDayMonths } from "./task-note";
 
 export type GuardedObject = "task" | "opportunity";
 
@@ -343,11 +345,14 @@ function judgeTask(
     const note = noteOf(data.bodyV2);
     if (note.problem) return [note.problem];
     markdown = note.markdown;
-    // A done Task's note ends in its proof; rewriting it would lose the proof (#3276).
+    // A done Task's note ends in its proof; rewriting it would lose the proof (#3276),
+    // unless the write is its reopening (CCI#1341).
     if (wasDone && markdown !== storedMarkdown) {
-      return [
-        "the Task is done — its note ends in its proof line, and a rewrite would lose it; a done Task's note is not rewritten",
-      ];
+      const reopen = reopeningProblems(storedMarkdown, markdown, {
+        nowOpen: !done,
+        reopenDates: todaysDayMonths(),
+      });
+      if (reopen.length > 0) return reopen;
     }
   } else {
     // The note is not written; it is judged when this write closes the Task, or moves a

@@ -7,6 +7,7 @@ import {
   emitOpenNote,
   formatDayMonth,
   parseIssueRef,
+  reopenNote,
 } from "../task-note";
 import { guardWrite, intendedWrites, type StoredReader } from "../write-guard";
 
@@ -273,6 +274,57 @@ describe("the guard", () => {
     await expect(
       guardWrite(patch({ bodyV2: { markdown: CLOSED } }), storedTask("DONE", CLOSED)),
     ).resolves.toBeUndefined();
+  });
+
+  it("lets a done Task's note be rewritten by its reopening alone (CCI#1341)", async () => {
+    const reopened = reopenNote(CLOSED, "the reply was on another matter").markdown!;
+    expect(reopened.split("\n\n").pop()).toBe(
+      `Closed ${formatDayMonth(new Date())} in error — reopened ${formatDayMonth(new Date())}: the reply was on another matter · proof was: [Gregor, 02.10](${MAIL})`,
+    );
+    expect(checkTaskNote(reopened, { done: false })).toEqual([]);
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: reopened } }),
+        storedTask("DONE", CLOSED),
+      ),
+    ).resolves.toBeUndefined();
+
+    // Staying done, changing another line, changing the proof, no reason, an old date: refused.
+    await expect(
+      guardWrite(patch({ bodyV2: { markdown: reopened } }), storedTask("DONE", CLOSED)),
+    ).rejects.toThrow(/rewritten only by its reopening/);
+    const otherLine = reopened.replace("Svend, Ticket #20049", "Svend");
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: otherLine } }),
+        storedTask("DONE", CLOSED),
+      ),
+    ).rejects.toThrow(/closing line alone/);
+    const otherProof = reopened.replace("[Gregor, 02.10]", "[Gregor]");
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: otherProof } }),
+        storedTask("DONE", CLOSED),
+      ),
+    ).rejects.toThrow(/date and proof as they stood/);
+    const noReason = reopened.replace(": the reply was on another matter ·", ":   ·");
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: noReason } }),
+        storedTask("DONE", CLOSED),
+      ),
+    ).rejects.toThrow();
+    const oldDate = reopened.replace(/reopened \d{2}\.\d{2}/, "reopened 01.01");
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: oldDate } }),
+        storedTask("DONE", CLOSED),
+      ),
+    ).rejects.toThrow(/not the day of the reopening/);
+
+    // The reopened Task closes again, its new proof line last after the wrong close.
+    const reclosed = appendClosingLine(reopened, closingLine("the right reply", `${MAIL}/3`));
+    expect(checkTaskNote(reclosed, { done: true })).toEqual([]);
   });
 
   it("refuses a filter-wide close and a merge, and lets a dry-run merge through", async () => {
