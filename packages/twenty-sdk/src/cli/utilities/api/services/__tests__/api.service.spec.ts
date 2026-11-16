@@ -601,4 +601,50 @@ describe("ApiService", () => {
       expect(lines).toEqual(["←  socket hang up"]);
     });
   });
+  describe("judgeWrites (CCI#1349)", () => {
+    const note = "Rests on: [the order](https://github.com/acme/deals/issues/1)";
+    // The guard reads a row's record as stored only when the row touches a guarded field;
+    // every read answers with the same open Task, titled "Book the call".
+    const readBack = () =>
+      mockAxiosInstance.get.mockResolvedValue({
+        data: {
+          data: { task: { title: "Book the call", status: "TODO", bodyV2: { markdown: note } } },
+        },
+      });
+
+    it("refuses the whole command, naming the refused row, when one row breaks the shape", async () => {
+      const service = new ApiService(mockConfigService as any);
+      readBack();
+
+      const judged = service.judgeWrites(
+        [
+          { method: "patch", url: "/rest/tasks/a", data: { dueAt: "2026-12-23T00:00:00.000Z" } },
+          { method: "patch", url: "/rest/tasks/b", data: { title: "Book another call" } },
+        ],
+        "row",
+      );
+
+      await expect(judged).rejects.toMatchObject({ code: "REFUSED" });
+      await expect(judged).rejects.toThrow(/row 2 of 2/);
+      await expect(judged).rejects.toThrow(/none of the 2 was sent and nothing was written/);
+      expect(mockAxiosInstance.patch).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.request).not.toHaveBeenCalled();
+    });
+
+    it("resolves, sending nothing, when every row is in shape", async () => {
+      const service = new ApiService(mockConfigService as any);
+      readBack();
+
+      await expect(
+        service.judgeWrites(
+          [
+            { method: "patch", url: "/rest/tasks/a", data: { dueAt: "2026-12-23T00:00:00.000Z" } },
+            { method: "patch", url: "/rest/tasks/b", data: { title: "Book the call" } },
+          ],
+          "row",
+        ),
+      ).resolves.toBeUndefined();
+      expect(mockAxiosInstance.patch).not.toHaveBeenCalled();
+    });
+  });
 });

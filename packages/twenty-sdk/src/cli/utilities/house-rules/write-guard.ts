@@ -29,6 +29,12 @@
  * outright, so that no route is left where a malformed note, a bare close or a new title
  * slips through unread.
  *
+ * A command that sends one write as several requests — `batch-update` one request per row, an
+ * `import` one per batch — is judged whole before its first request leaves
+ * (`ApiService.judgeWrites`, CCI#1349): a refused row sends no row, so the refusal's "nothing
+ * was written" is true of the command. Only an import run with `--continue-on-error`, which
+ * asks for the batches that pass to be written, is judged batch by batch as it leaves.
+ *
  * The second open Task with the same title on one Company is not judged here: a Task's
  * Company is known only once its target is written, after the Task itself. `twenty tasks
  * create` and `reopen` refuse it before their first write (`task-title.ts`).

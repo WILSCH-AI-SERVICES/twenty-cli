@@ -72,6 +72,7 @@ function createMockContext(overrides: Partial<ApiOperationContext> = {}): ApiOpe
         restoreMany: vi.fn().mockResolvedValue([{ id: "1" }, { id: "2" }]),
         merge: vi.fn().mockResolvedValue({ id: "merged-id" }),
         batchCreate: vi.fn().mockResolvedValue([{ id: "1" }, { id: "2" }]),
+        judgeBatchCreates: vi.fn().mockResolvedValue(undefined),
         batchUpdate: vi.fn().mockResolvedValue([{ id: "1" }, { id: "2" }]),
         updateMany: vi.fn().mockResolvedValue([{ id: "1" }, { id: "2" }]),
         batchDelete: vi.fn().mockResolvedValue({ deleted: 2 }),
@@ -568,6 +569,36 @@ describe("API Operations", () => {
       await runImportOperation(ctx);
 
       expect(consoleSpy).toHaveBeenCalledWith("Import complete: 1 imported, 1 failed.");
+    });
+
+    it("judges every batch before sending one, and sends none when one is refused (CCI#1349)", async () => {
+      const ctx = createMockContext({ arg: "/path/to/data.csv", options: { batchSize: "1" } });
+      (ctx.services.importer.import as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { name: "Test1" },
+        { name: "Test2" },
+      ]);
+      (ctx.services.records.judgeBatchCreates as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new CliError("Refused before it reached the instance", "REFUSED"),
+      );
+
+      await expect(runImportOperation(ctx)).rejects.toThrow("Refused before it reached");
+      expect(ctx.services.records.judgeBatchCreates).toHaveBeenCalledWith("people", [
+        [{ name: "Test1" }],
+        [{ name: "Test2" }],
+      ]);
+      expect(ctx.services.records.batchCreate).not.toHaveBeenCalled();
+    });
+
+    it("leaves batches to be judged as they leave under --continue-on-error (CCI#1349)", async () => {
+      const ctx = createMockContext({
+        arg: "/path/to/data.csv",
+        options: { continueOnError: true },
+      });
+
+      await runImportOperation(ctx);
+
+      expect(ctx.services.records.judgeBatchCreates).not.toHaveBeenCalled();
+      expect(ctx.services.records.batchCreate).toHaveBeenCalled();
     });
 
     it("caps batch size at 60", async () => {

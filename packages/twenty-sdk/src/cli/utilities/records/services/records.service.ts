@@ -110,6 +110,17 @@ export class RecordsService {
     return response.data ?? null;
   }
 
+  /**
+   * Judges every batch an import is about to send, sending none, so a refused row in a later
+   * batch leaves no earlier batch written (CCI#1349).
+   */
+  async judgeBatchCreates(object: string, batches: Record<string, unknown>[][]): Promise<void> {
+    await this.api.judgeWrites(
+      batches.map((batch) => ({ method: "post", url: `/rest/batch/${object}`, data: batch })),
+      "batch",
+    );
+  }
+
   async batchCreate(object: string, records: Record<string, unknown>[]): Promise<unknown> {
     const response = await this.api.post(`/rest/batch/${object}`, records);
     return response.data ?? null;
@@ -121,6 +132,19 @@ export class RecordsService {
     options: BatchUpdateOptions = {},
   ): Promise<unknown> {
     const concurrency = options.concurrency ?? DEFAULT_BATCH_UPDATE_CONCURRENCY;
+    // One request per row leaves below, each judged by the guard as it leaves; judged whole
+    // here first, a batch with one refused row sends no row (CCI#1349).
+    await this.api.judgeWrites(
+      records.map((record) => {
+        const { id: _ignoredId, ...data } = record;
+        return {
+          method: "patch",
+          url: `/rest/${object}/${encodeURIComponent(extractRecordId(record))}`,
+          data,
+        };
+      }),
+      "row",
+    );
     const updates: unknown[] = new Array(records.length);
     let nextIndex = 0;
 
