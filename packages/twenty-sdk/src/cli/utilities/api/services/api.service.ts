@@ -7,7 +7,13 @@ import axios, {
 import axiosRetry from "axios-retry";
 
 import { ConfigService } from "../../config/services/config.service";
-import { guardWrite, type GuardedObject } from "../../house-rules/write-guard";
+import { CliError } from "../../errors/cli-error";
+import {
+  guardWrite,
+  REFUSED,
+  type GuardedObject,
+  type OutgoingRequest,
+} from "../../house-rules/write-guard";
 import { redactSensitiveText, stringifyDebugPreview } from "../../shared/debug-redaction";
 
 export interface ApiServiceOptions {
@@ -193,5 +199,62 @@ export class ApiService {
 
   async request<T = unknown>(config: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     return this.client.request<T>(config);
+  }
+
+  /**
+   * Judges, without sending any, every request a command is about to send as one write, and
+   * throws one refusal naming each refused request when any breaks the house's shape
+   * (CCI#1349). The guard in the request interceptor judges a request only as it leaves, so a
+   * command that sends one write as several requests — a batch update, an import's batches —
+   * would have its earlier requests written before a later one is refused; judged here first,
+   * a refusal sends none of them. Each request is read against the record as the requests
+   * before it leave it: the record as stored, read fresh exactly as the interceptor reads it,
+   * with the fields of every earlier request in the list that passed and names the same record
+   * laid over it — so a later row that breaks the shape only once an earlier row has landed
+   * (a close, then a move off DONE with the proof line standing) is refused here too, not
+   * after the earlier row was written (CCI#1349 cold session 1526ac56). The caller sends the
+   * requests in list order when one record is named twice (`RecordsService.batchUpdate`).
+   */
+  async judgeWrites(requests: OutgoingRequest[], label: string): Promise<void> {
+    const refusals: string[] = [];
+    const asLeft = new Map<string, Record<string, unknown> | undefined>();
+    for (const [index, request] of requests.entries()) {
+      const read = new Set<string>();
+      const reader = async (object: GuardedObject, id: string) => {
+        const key = `${object}:${id}`;
+        read.add(key);
+        if (!asLeft.has(key)) asLeft.set(key, await readStoredRecord(this.client, object, id));
+        return asLeft.get(key);
+      };
+      try {
+        await guardWrite(request, reader);
+        const data = request.data;
+        const method = request.method?.toLowerCase();
+        if (
+          (method === "patch" || method === "put") &&
+          read.size === 1 &&
+          data &&
+          typeof data === "object" &&
+          !Array.isArray(data)
+        ) {
+          const [key] = [...read];
+          const before = asLeft.get(key!);
+          if (before) asLeft.set(key!, { ...before, ...(data as Record<string, unknown>) });
+        }
+      } catch (error) {
+        if (!(error instanceof CliError) || error.code !== REFUSED) throw error;
+        const lines = error.message
+          .split("\n")
+          .slice(1)
+          .map((line) => `      ${line.trim()}`);
+        refusals.push(`${label} ${index + 1} of ${requests.length}:\n${lines.join("\n")}`);
+      }
+    }
+    if (refusals.length === 0) return;
+    throw new CliError(
+      `Refused before it reached the instance — ${refusals.length} of ${requests.length} ${label}s break the house's shape, so none of the ${requests.length} was sent and nothing was written:\n  - ${refusals.join("\n  - ")}`,
+      REFUSED,
+      "Correct or drop the refused rows and send the write again; each row is judged as the record stands (https://docs.wilsch-ai.com/partner-lead-crm-design Part 2).",
+    );
   }
 }

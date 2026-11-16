@@ -23,6 +23,12 @@ export async function runImportOperation(ctx: ApiOperationContext): Promise<void
   }
 
   const batches = chunkArray(records, batchSize);
+  // Batches leave one after another, each judged by the guard as it leaves. Unless the caller
+  // asked to go on past a failed batch, judge them all first, so a refused row in a later
+  // batch leaves no earlier batch written (CCI#1349).
+  if (!ctx.options.continueOnError) {
+    await ctx.services.records.judgeBatchCreates(ctx.object, batches);
+  }
   let imported = 0;
   let errors = 0;
 
