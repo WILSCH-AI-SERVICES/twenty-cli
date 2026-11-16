@@ -658,7 +658,11 @@ describe("ApiService", () => {
 
       const judged = service.judgeWrites(
         [
-          { method: "patch", url: "/rest/tasks/a", data: { status: "DONE", bodyV2: { markdown: closed } } },
+          {
+            method: "patch",
+            url: "/rest/tasks/a",
+            data: { status: "DONE", bodyV2: { markdown: closed } },
+          },
           { method: "patch", url: "/rest/tasks/a", data: { status: "TODO" } },
         ],
         "row",
