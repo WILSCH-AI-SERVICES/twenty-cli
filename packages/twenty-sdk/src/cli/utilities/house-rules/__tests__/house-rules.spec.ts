@@ -372,3 +372,103 @@ describe("the guard", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("an open Task's title does not change (CCI#1346)", () => {
+  const titled =
+    (status: string, title = "We owe the offer"): StoredReader =>
+    async () => ({ id: "t1", status, title, bodyV2: { markdown: OPEN } });
+  const retitled = /an open Task's title does not change — a changed owing closes this Task/;
+  const patchTask = (data: unknown, url = "/rest/tasks/t1") => ({
+    method: "patch",
+    baseURL: BASE,
+    url,
+    data,
+  });
+
+  it("refuses a new title by REST update, upsert, GraphQL, MCP and a batch, naming the title it reads", async () => {
+    const routes = [
+      patchTask({ title: "New" }),
+      { method: "put", baseURL: BASE, url: "/rest/core/tasks/t1", data: { title: "New" } },
+      {
+        method: "post",
+        baseURL: BASE,
+        url: "/rest/tasks?upsert=true",
+        data: { id: "t1", title: "New", bodyV2: { markdown: OPEN } },
+      },
+      {
+        method: "post",
+        baseURL: BASE,
+        url: "/graphql",
+        data: { query: 'mutation { updateTask(id: "t1", data: { title: "New" }) { id } }' },
+      },
+      {
+        method: "post",
+        baseURL: BASE,
+        url: "/graphql",
+        data: {
+          query:
+            "mutation M($d: [TaskCreateInput!]!) { createTasks(data: $d, upsert: true) { id } }",
+          variables: { d: [{ id: "t1", title: "New", bodyV2: { markdown: OPEN } }] },
+        },
+      },
+      {
+        method: "post",
+        baseURL: BASE,
+        url: "/mcp",
+        data: {
+          method: "tools/call",
+          params: { name: "update_one_task", arguments: { id: "t1", title: "New" } },
+        },
+      },
+    ];
+    for (const request of routes) {
+      await expect(guardWrite(request, titled("TODO")), JSON.stringify(request)).rejects.toThrow(
+        retitled,
+      );
+    }
+    await expect(guardWrite(patchTask({ title: "New" }), titled("IN_PROGRESS"))).rejects.toThrow(
+      /Task t1 reads "We owe the offer"/,
+    );
+  });
+
+  it("refuses a title written in the same write as the close or the reopening", async () => {
+    await expect(
+      guardWrite(
+        patchTask({ title: "New", status: "DONE", bodyV2: { markdown: CLOSED } }),
+        titled("TODO"),
+      ),
+    ).rejects.toThrow(retitled);
+    await expect(
+      guardWrite(patchTask({ title: "", status: "TODO" }), titled("DONE")),
+    ).rejects.toThrow(retitled);
+  });
+
+  it("refuses a filter-wide title and a merge of Tasks, saying the title rule", async () => {
+    await expect(
+      guardWrite(patchTask({ title: "New" }, "/rest/tasks"), titled("TODO")),
+    ).rejects.toThrow(/filter-wide update of title .*an open Task's title does not change/);
+    await expect(
+      guardWrite(
+        { method: "post", baseURL: BASE, url: "/rest/tasks/merge", data: { ids: ["a", "b"] } },
+        none,
+      ),
+    ).rejects.toThrow(/title, note and status/);
+  });
+
+  it("lets a write that leaves the title as it stood through, and the moves that never name it", async () => {
+    for (const data of [
+      { title: "We owe the offer", dueAt: "2026-12-01" },
+      { dueAt: "2026-12-01" },
+      { assigneeId: "m1" },
+      { roomId: "e1" },
+      { waitsOnId: "t2" },
+      { ticket: "19966" },
+      { bodyV2: { markdown: OPEN } },
+    ]) {
+      await expect(
+        guardWrite(patchTask(data), titled("TODO")),
+        JSON.stringify(data),
+      ).resolves.toBeUndefined();
+    }
+  });
+});

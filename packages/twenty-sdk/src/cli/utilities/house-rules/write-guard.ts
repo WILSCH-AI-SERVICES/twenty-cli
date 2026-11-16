@@ -16,14 +16,22 @@
  *     proof line still standing (#3276) — no closed Task loses its proof — save its
  *     reopening, which moves it off DONE and turns the closing line alone into the dated
  *     line saying the close was made in error and why (CCI#1341, `reopeningProblems`);
+ *   - a Task open before or after the write whose title the write changes — an open Task is
+ *     never re-titled; a changed owing closes it and writes the next one (CCI#1346,
+ *     `task-title.ts`);
  *   - an Opportunity at CLOSED_WON or CLOSED_LOST whose `whyStopped` carries no address,
  *     including one created already closed.
  *
  * The guard judges the record as it would stand after the write: an update that names only
  * some fields is merged with the stored record, read fresh before the write is sent. A
  * write it cannot judge one record at a time — a filter-wide update touching a guarded
- * field, a merge of Tasks or Opportunities — is refused outright, so that no route is left
- * where a malformed note or a bare close slips through unread.
+ * field (a Task's title among them), a merge of Tasks or Opportunities — is refused
+ * outright, so that no route is left where a malformed note, a bare close or a new title
+ * slips through unread.
+ *
+ * The second open Task with the same title on one Company is not judged here: a Task's
+ * Company is known only once its target is written, after the Task itself. `twenty tasks
+ * create` and `reopen` refuse it before their first write (`task-title.ts`).
  *
  * Out of reach here: writes the instance makes by itself (workflows, logic functions,
  * the mail sync). They do not leave through this tool, and the design names their
@@ -33,6 +41,7 @@ import { Kind, parse, valueFromASTUntyped, type DocumentNode, type ValueNode } f
 
 import { CliError } from "../errors/cli-error";
 import { checkTaskNote, isAddress, reopeningProblems, todaysDayMonths } from "./task-note";
+import { RETITLE_RULE, titleChangeProblem } from "./task-title";
 
 export type GuardedObject = "task" | "opportunity";
 
@@ -386,7 +395,7 @@ function judgeOpportunity(
 }
 
 const TOUCHES: Record<GuardedObject, string[]> = {
-  task: ["status", "bodyV2"],
+  task: ["status", "bodyV2", "title"],
   opportunity: ["stage", "whyStopped"],
 };
 
@@ -400,7 +409,9 @@ async function judge(write: IntendedWrite, readStored: StoredReader): Promise<st
         ? []
         : [
             `a merge of ${noun} records is refused — the merged record's ${
-              write.object === "task" ? "note and status" : "stage and why it stopped progressing"
+              write.object === "task"
+                ? "title, note and status"
+                : "stage and why it stopped progressing"
             } cannot be checked before it lands; update the surviving record and delete the other`,
           ];
     case "updateMany": {
@@ -412,7 +423,9 @@ async function judge(write: IntendedWrite, readStored: StoredReader): Promise<st
         if (typeof stage !== "string" || !CLOSED_STAGES.has(stage)) return [];
       }
       return [
-        `a filter-wide update of ${touched.join(" and ")} on ${noun} records is refused — write each ${noun} by its id, so each is checked`,
+        `a filter-wide update of ${touched.join(" and ")} on ${noun} records is refused — write each ${noun} by its id, so each is checked${
+          touched.includes("title") ? `; ${RETITLE_RULE}` : ""
+        }`,
       ];
     }
     case "create": {
@@ -422,7 +435,7 @@ async function judge(write: IntendedWrite, readStored: StoredReader): Promise<st
         const stored = await readStored(write.object, id);
         if (stored) {
           const { id: _id, ...rest } = write.data;
-          return judgeUpdate(write.object, rest, stored);
+          return judgeUpdate(write.object, id, rest, stored);
         }
       }
       return write.object === "task"
@@ -441,17 +454,20 @@ async function judge(write: IntendedWrite, readStored: StoredReader): Promise<st
         // Fail closed: a record the guard cannot read is one it cannot judge.
         return [`${noun} ${write.id} could not be read back, so the write cannot be checked`];
       }
-      return judgeUpdate(write.object, data, stored);
+      return judgeUpdate(write.object, write.id, data, stored);
     }
   }
 }
 
 function judgeUpdate(
   object: GuardedObject,
+  id: string,
   data: Record<string, unknown>,
   stored: Record<string, unknown>,
 ): string[] {
-  return object === "task" ? judgeTask(data, stored) : judgeOpportunity(data, stored);
+  if (object === "opportunity") return judgeOpportunity(data, stored);
+  const retitle = titleChangeProblem(id, data, stored);
+  return [...(retitle ? [retitle] : []), ...judgeTask(data, stored)];
 }
 
 /**
