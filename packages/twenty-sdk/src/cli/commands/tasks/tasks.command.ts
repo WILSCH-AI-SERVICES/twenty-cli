@@ -20,9 +20,12 @@ import {
   isAddress,
   labelProblem,
   parseIssueRef,
+  quoteProblem,
   reasonProblem,
   reopenLines,
   reopenNote,
+  restOnSent,
+  CLOSED_SHAPE,
   type IssueRef,
 } from "../../utilities/house-rules/task-note";
 import {
@@ -62,6 +65,12 @@ interface TaskNoteOptions {
 interface TaskCloseOptions {
   proof?: string;
   proofLabel?: string;
+  proofLine?: string;
+}
+
+interface TaskSentOptions {
+  sentMail?: string;
+  sentOn?: string;
 }
 
 interface TaskClearOptions {
@@ -93,6 +102,7 @@ type TaskRecord = {
   owesPersonId?: string | null;
   roomId?: string | null;
   companyId?: string | null;
+  createdAt?: string | null;
 };
 
 type TaskTarget = {
@@ -162,9 +172,12 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  *   create        write an open Task: its note (#3266), what it waits on and its ticket
  *                 (#3388), who owes it and its room (CCI#1341)
  *   note          rewrite an open Task's note into the one shape (#3276)
- *   close         mark it done, its note ending in the dated proof line
+ *   close         mark it done, its note ending in the dated proof line, which quotes the line
+ *                 that closed it: Closed DD.MM · proof: "the line" — [what it is](address)
+ *                 (CCI#1363); a close without the quoted line is refused before any request
  *
- * The six moves an open Task allows, each writing its own fields and nothing else:
+ * The moves an open Task allows, each writing its own fields and nothing else (its *moves by*
+ * is the eighth's sibling in A Task's Life Part 5, not yet a field on the instance):
  *
  *   set-due       a new date — refused on a Task whose room is booked (its date follows the
  *                 room's event; the refusal names the room) and on a Task that waits
@@ -173,6 +186,12 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  *   set-ticket    its ticket at the counterparty
  *   set-room      its room, a synced calendar event; the store dates it on the event's day
  *   retarget      its targets: moved from one record onto another, or widened
+ *   sent          the eighth move (CCI#1363): a Task written on a draft moved onto the sent
+ *                 mail the draft became, in one write — the Rests on address alone changes in
+ *                 the note, and its date is laid from the send: the send day plus the days the
+ *                 writer gave it (old due date minus the day it was written, its createdAt in
+ *                 Europe/Berlin). A Task whose room is booked keeps the room's date; a Task with
+ *                 no date (one that waits) is given none
  *
  * And the one move a closed Task allows:
  *
@@ -207,7 +226,7 @@ export function registerTasksCommand(program: Command): void {
   const tasks = program
     .command("tasks")
     .description(
-      `Tasks with their note in the house's one shape, and every move a Task allows: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and reopen. ${TITLE_RULES}`,
+      `Tasks with their note in the house's one shape, and every move a Task allows. An open Task: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and sent — a Task written on a draft moved onto the sent mail the draft became, its date laid from the send. A closed Task: reopen. A close ends the note in ${CLOSED_SHAPE}, the line that closed it quoted. ${TITLE_RULES}`,
     );
   applyGlobalOptions(tasks);
 
@@ -362,10 +381,16 @@ export function registerTasksCommand(program: Command): void {
 
   const close = tasks
     .command("close")
-    .description("Mark a Task done, its note ending in Closed DD.MM · proof: [what it is](address)")
+    .description(
+      `Mark a Task done, its note ending in ${CLOSED_SHAPE}: the sentence that closed it, quoted (--proof-line), and the artifact that holds it (--proof-label, --proof). A close without all three is refused before anything is sent.`,
+    )
     .argument("<id>", "The Task's id")
     .option("--proof <address>", "Address of the artifact that closed it")
-    .option("--proof-label <text>", "What that artifact is, in a few words");
+    .option("--proof-label <text>", "What that artifact is, in a few words")
+    .option(
+      "--proof-line <text>",
+      'The line in it that closed the Task, quoted as it stands — it lands in quotes before the link: proof: "the line" — [what it is](address)',
+    );
   applyGlobalOptions(close);
 
   close.action(async (id: string, _options: unknown, command: Command) => {
@@ -373,6 +398,10 @@ export function registerTasksCommand(program: Command): void {
     const options = command.opts() as TaskCloseOptions;
 
     const missing: string[] = [];
+    const quote = quoteProblem(options.proofLine);
+    if (quote) {
+      missing.push(`${quote} — pass --proof-line <the line, as it stands>; the Task stays open`);
+    }
     if (!options.proof) {
       missing.push(
         "the close is missing its proof — pass --proof <address of what closed it>; the Task stays open",
@@ -400,7 +429,14 @@ export function registerTasksCommand(program: Command): void {
     await services.records.update("tasks", id, {
       status: "DONE",
       bodyV2: {
-        markdown: appendClosingLine(note, closingLine(options.proofLabel!, options.proof!)),
+        markdown: appendClosingLine(
+          note,
+          closingLine({
+            line: options.proofLine!,
+            label: options.proofLabel!,
+            url: options.proof!,
+          }),
+        ),
       },
     });
 
@@ -738,6 +774,75 @@ export function registerTasksCommand(program: Command): void {
     await renderStored(services, id, globalOptions);
   });
 
+  const sent = tasks
+    .command("sent")
+    .description(
+      "The eighth move: an open Task written on a draft, moved onto the sent mail the draft became, in one write. Its note rests on the sent mail, nothing else in it changed, and its date is laid from the send — due the send day plus the days that stood between the day the Task was written and its old due date, so the wait its writer chose is kept. A Task whose room is booked keeps the room's date and only its note moves; a Task with no date, one that waits, is given none; a closed Task is refused.",
+    )
+    .argument("<id>", "The Task's id")
+    .option("--sent-mail <address>", "Address of the sent mail the draft became")
+    .option("--sent-on <date>", "The day it was sent, YYYY-MM-DD (Europe/Berlin)");
+  applyGlobalOptions(sent);
+
+  sent.action(async (id: string, _options: unknown, command: Command) => {
+    const { globalOptions, services } = await createCommandContext(command);
+    const options = command.opts() as TaskSentOptions;
+
+    const missing: string[] = [];
+    if (!options.sentMail) {
+      missing.push("the move is missing the sent mail — pass --sent-mail <its address>");
+    } else if (!isAddress(options.sentMail)) {
+      missing.push(`--sent-mail "${options.sentMail}" is not an http(s) address`);
+    }
+    const sentOn = options.sentOn?.trim();
+    if (!sentOn) {
+      missing.push("the move is missing the day the mail was sent — pass --sent-on YYYY-MM-DD");
+    } else if (!isDay(sentOn)) {
+      missing.push(`--sent-on "${options.sentOn}" is not a day — pass YYYY-MM-DD`);
+    }
+    if (missing.length > 0) refuse([...missing, `Task ${id} is unchanged`]);
+
+    const stored = await openTask(services, id);
+    const moved = restOnSent(stored.bodyV2?.markdown ?? "", options.sentMail!);
+    if (!moved.markdown) {
+      refuse([...moved.problems, `Task ${id} is unchanged`], { afterRead: true });
+    }
+    const shape = checkTaskNote(moved.markdown, { done: false });
+    if (shape.length > 0) {
+      refuse([`Task ${id}'s note is not in the one shape, so it cannot be moved:`, ...shape], {
+        afterRead: true,
+      });
+    }
+
+    const written = berlinDay(stored.createdAt);
+    const problems: string[] = [];
+    if (!written) problems.push(`Task ${id} carries no day it was written (createdAt)`);
+    else if (sentOn! < written) {
+      problems.push(
+        `--sent-on ${sentOn} is before the day Task ${id} was written (${written}) — a draft is sent after the Task written on it`,
+      );
+    }
+    if (sentOn! > berlinDay(new Date().toISOString())!) {
+      problems.push(`--sent-on ${sentOn} is after today — a mail not yet sent has no send day`);
+    }
+    if (problems.length > 0) refuse([...problems, `Task ${id} is unchanged`], { afterRead: true });
+
+    // Its date: a booked room's event holds it; a Task with no date (it waits) is given none;
+    // otherwise the wait its writer chose, laid from the send.
+    const event = stored.roomId ? await findEvent(services, stored.roomId) : undefined;
+    const booked = !!(event && berlinDay(event.startsAt));
+    const dueDay = stored.dueAt ? stored.dueAt.slice(0, 10) : undefined;
+    const data: Record<string, unknown> = { bodyV2: { markdown: moved.markdown! } };
+    if (!booked && dueDay && isDay(dueDay)) {
+      data.dueAt = `${addDays(sentOn!, daysBetween(written!, dueDay))}T00:00:00.000Z`;
+    }
+
+    // One write: the note and the date land together or not at all.
+    await services.records.update("tasks", id, data);
+
+    await renderStored(services, id, globalOptions);
+  });
+
   const migrate = tasks
     .command("migrate")
     .description(
@@ -884,6 +989,23 @@ function waitOf(task: TaskRecord): string | undefined {
   return undefined;
 }
 
+/** Whether `value` is a calendar day, YYYY-MM-DD. */
+function isDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+/** The days from one calendar day to another, YYYY-MM-DD each; negative when `to` is earlier. */
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+}
+
+/** The calendar day `days` after `day`, YYYY-MM-DD. */
+function addDays(day: string, days: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+}
+
 /** The Europe/Berlin calendar day of an instant, YYYY-MM-DD; the house's day (Part 3). */
 function berlinDay(instant: string | null | undefined): string | undefined {
   if (!instant) return undefined;
@@ -970,6 +1092,7 @@ async function renderStored(
       id: task.id,
       title: task.title,
       status: task.status,
+      createdAt: task.createdAt ?? null,
       dueAt: task.dueAt ?? null,
       assigneeId: task.assigneeId ?? null,
       owes: task.owes ?? null,

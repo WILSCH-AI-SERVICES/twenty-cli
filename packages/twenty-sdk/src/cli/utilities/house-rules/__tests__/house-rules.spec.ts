@@ -8,6 +8,7 @@ import {
   formatDayMonth,
   parseIssueRef,
   reopenNote,
+  restOnSent,
 } from "../task-note";
 import { guardWrite, intendedWrites, type StoredReader } from "../write-guard";
 
@@ -17,7 +18,11 @@ const OPEN = emitOpenNote({
   restsOnUrl: MAIL,
   issue: parseIssueRef("#2296"),
 });
-const CLOSED = appendClosingLine(OPEN, closingLine("Gregor, 02.10", MAIL));
+const LINE = "Access is set up for all three of you.";
+const proof = (label: string, url: string, line = LINE) => closingLine({ line, label, url });
+const CLOSED = appendClosingLine(OPEN, proof("Gregor, 02.10", MAIL));
+/** A Task closed before CCI#1363: its closing line quotes nothing. */
+const EARLIER = `${OPEN}\n\nClosed 06.10 · proof: [Gregor, 02.10](${MAIL})`;
 const BASE = "https://crm.acme.com";
 
 const none: StoredReader = async () => undefined;
@@ -36,13 +41,47 @@ describe("the Task note's shape", () => {
     expect(checkTaskNote(OPEN, { done: false })).toEqual([]);
   });
 
-  it("accepts a closed note dated today, as its last line", () => {
+  it("accepts a closed note dated today, the line that closed it quoted before the link, as its last line", () => {
     expect(
-      CLOSED.endsWith(`Closed ${formatDayMonth(new Date())} · proof: [Gregor, 02.10](${MAIL})`),
+      CLOSED.endsWith(
+        `Closed ${formatDayMonth(new Date())} · proof: "${LINE}" — [Gregor, 02.10](${MAIL})`,
+      ),
     ).toBe(true);
     expect(
       checkTaskNote(CLOSED, { done: true, closingDates: [formatDayMonth(new Date())] }),
     ).toEqual([]);
+  });
+
+  it("refuses a close written now in the earlier shape, and leaves a Task closed in it standing (CCI#1363)", () => {
+    const today = formatDayMonth(new Date());
+    const bare = `${OPEN}\n\nClosed ${today} · proof: [Gregor, 02.10](${MAIL})`;
+    expect(checkTaskNote(bare, { done: true, closingDates: [today] }).join()).toMatch(
+      /does not quote the line that closed it/,
+    );
+    expect(
+      checkTaskNote(`${OPEN}\n\nClosed ${today} · proof: " " — [x](${MAIL})`, {
+        done: true,
+        closingDates: [today],
+      }).join(),
+    ).toMatch(/quotes are empty/);
+    // Read as it stands, on a write that is not its close.
+    expect(checkTaskNote(EARLIER, { done: true })).toEqual([]);
+    // Either shape on an open Task is a proof line where none belongs.
+    expect(checkTaskNote(EARLIER, { done: false }).join()).toMatch(/not done/);
+    expect(checkTaskNote(CLOSED, { done: false }).join()).toMatch(/not done/);
+  });
+
+  it("moves a draft-resting note onto the sent mail, the address alone changed (the eighth move)", () => {
+    const reopened = reopenNote(EARLIER, "wrong reply").markdown!;
+    const moved = restOnSent(reopened, `${MAIL}/sent`);
+    expect(moved.draftUrl).toBe(MAIL);
+    const [first, ...rest] = moved.markdown!.split("\n\n");
+    const [oldFirst, ...oldRest] = reopened.split("\n\n");
+    expect(first).toBe(`Rests on: [Svend, Ticket #20049, 05.10](${MAIL}/sent)`);
+    expect(oldFirst).toBe(`Rests on: [Svend, Ticket #20049, 05.10](${MAIL})`);
+    expect(rest).toEqual(oldRest);
+    expect(restOnSent(OPEN, MAIL).problems.join()).toMatch(/already rests on/);
+    expect(restOnSent("a paragraph", MAIL).problems.join()).toMatch(/does not open/);
   });
 
   it.each([
@@ -258,7 +297,7 @@ describe("the guard", () => {
   });
 
   it("refuses rewriting a done Task's note, and moving it off DONE with its proof line", async () => {
-    const otherClose = appendClosingLine(OPEN, closingLine("someone else", `${MAIL}/2`));
+    const otherClose = appendClosingLine(OPEN, proof("someone else", `${MAIL}/2`));
     await expect(
       guardWrite(patch({ bodyV2: { markdown: OPEN } }), storedTask("DONE", CLOSED)),
     ).rejects.toThrow(/is done/);
@@ -279,7 +318,7 @@ describe("the guard", () => {
   it("lets a done Task's note be rewritten by its reopening alone (CCI#1341)", async () => {
     const reopened = reopenNote(CLOSED, "the reply was on another matter").markdown!;
     expect(reopened.split("\n\n").pop()).toBe(
-      `Closed ${formatDayMonth(new Date())} in error — reopened ${formatDayMonth(new Date())}: the reply was on another matter · proof was: [Gregor, 02.10](${MAIL})`,
+      `Closed ${formatDayMonth(new Date())} in error — reopened ${formatDayMonth(new Date())}: the reply was on another matter · proof was: "${LINE}" — [Gregor, 02.10](${MAIL})`,
     );
     expect(checkTaskNote(reopened, { done: false })).toEqual([]);
     await expect(
@@ -322,9 +361,53 @@ describe("the guard", () => {
       ),
     ).rejects.toThrow(/not the day of the reopening/);
 
+    const otherQuote = reopened.replace(LINE, "Something else.");
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: otherQuote } }),
+        storedTask("DONE", CLOSED),
+      ),
+    ).rejects.toThrow(/date and proof as they stood/);
+
     // The reopened Task closes again, its new proof line last after the wrong close.
-    const reclosed = appendClosingLine(reopened, closingLine("the right reply", `${MAIL}/3`));
+    const reclosed = appendClosingLine(reopened, proof("the right reply", `${MAIL}/3`));
     expect(checkTaskNote(reclosed, { done: true })).toEqual([]);
+  });
+
+  it("reopens a Task closed in the earlier shape, keeping its proof as it stood (CCI#1363)", async () => {
+    const reopened = reopenNote(EARLIER, "wrong reply").markdown!;
+    expect(reopened.split("\n\n").pop()).toBe(
+      `Closed 06.10 in error — reopened ${formatDayMonth(new Date())}: wrong reply · proof was: [Gregor, 02.10](${MAIL})`,
+    );
+    expect(checkTaskNote(reopened, { done: false })).toEqual([]);
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: reopened } }),
+        storedTask("DONE", EARLIER),
+      ),
+    ).resolves.toBeUndefined();
+    // A reopen line that invents a quote the wrong close never carried is refused.
+    const invented = reopened.replace("proof was: [", `proof was: "${LINE}" — [`);
+    await expect(
+      guardWrite(
+        patch({ status: "TODO", bodyV2: { markdown: invented } }),
+        storedTask("DONE", EARLIER),
+      ),
+    ).rejects.toThrow(/date and proof as they stood/);
+    // A Task closed in the earlier shape stands through a write that touches neither note nor status.
+    await expect(
+      guardWrite(patch({ dueAt: "2026-12-01" }), storedTask("DONE", EARLIER)),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses an outside writer's close in the earlier shape (CCI#1363)", async () => {
+    const bare = `${OPEN}\n\nClosed ${formatDayMonth(new Date())} · proof: [Gregor, 02.10](${MAIL})`;
+    await expect(
+      guardWrite(patch({ status: "DONE", bodyV2: { markdown: bare } }), storedTask("TODO", OPEN)),
+    ).rejects.toThrow(/does not quote the line that closed it/);
+    await expect(
+      guardWrite(post({ title: "x", status: "DONE", bodyV2: { markdown: bare } }), none),
+    ).rejects.toThrow(/does not quote the line that closed it/);
   });
 
   it("refuses a filter-wide close and a merge, and lets a dry-run merge through", async () => {

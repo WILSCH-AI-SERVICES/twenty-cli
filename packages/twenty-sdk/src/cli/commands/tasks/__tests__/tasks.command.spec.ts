@@ -415,8 +415,156 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
         "https://example.com/mail/right",
         "--proof-label",
         "the right reply",
+        "--proof-line",
+        "Yes, we go ahead.",
       );
       expect(rendered).toMatchObject({ status: "DONE" });
+    });
+
+    it("reopens a Task closed in the new shape, the quoted line kept in the reopen line (CCI#1363)", async () => {
+      const quoted = `Closed 14.11 · proof: "Yes, we go ahead." — [their reply 14.11](https://example.com/mail/reply)`;
+      store.tasks!.get("done")!.bodyV2 = { markdown: `${NOTE}\n\n${quoted}` };
+      await run("reopen", "done", "--why", "the yes was for another offer");
+
+      expect(updates).toEqual([
+        [
+          "done",
+          {
+            status: "TODO",
+            bodyV2: {
+              markdown: `${NOTE}\n\nClosed 14.11 in error — reopened ${formatDayMonth(new Date())}: the yes was for another offer · proof was: "Yes, we go ahead." — [their reply 14.11](https://example.com/mail/reply)`,
+            },
+          },
+        ],
+      ]);
+    });
+  });
+
+  describe("close (CCI#1363)", () => {
+    const args = [
+      "--proof",
+      "https://example.com/mail/yes",
+      "--proof-label",
+      "Sebastian, 19.11",
+      "--proof-line",
+      "Yes, go ahead with the pilot.",
+    ];
+
+    it('ends the note in Closed DD.MM · proof: "the line" — [what it is](address)', async () => {
+      await run("close", "t1", ...args);
+      expect(updates).toEqual([
+        [
+          "t1",
+          {
+            status: "DONE",
+            bodyV2: {
+              markdown: `${NOTE}\n\nClosed ${formatDayMonth(new Date())} · proof: "Yes, go ahead with the pilot." — [Sebastian, 19.11](https://example.com/mail/yes)`,
+            },
+          },
+        ],
+      ]);
+    });
+
+    it("refuses a close without the quoted line before it reads or writes anything", async () => {
+      expect(await refusal("close", "t1", ...args.slice(0, 4))).toContain(
+        "does not quote the line that closed it",
+      );
+      expect(await refusal("close", "t1", ...args.slice(0, 4), "--proof-line", "  ")).toContain(
+        "does not quote the line that closed it",
+      );
+      expect(updates).toEqual([]);
+      const ctx = await mockCreateCommandContext.mock.results[0]!.value;
+      expect(ctx.services.api.get).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("sent — the eighth move (CCI#1363)", () => {
+    const draft = "Rests on: [our mail to Sebastian](https://mail.google.com/mail/#drafts/d1)";
+    const sentMail = "https://mail.google.com/mail/#sent/s1";
+    const issue =
+      "Issue: [DaveX2001/deliverable-tracking#3388](https://github.com/DaveX2001/deliverable-tracking/issues/3388)";
+    beforeEach(() => {
+      store.tasks!.set("drafted", {
+        id: "drafted",
+        title: "Sebastian owes his yes",
+        status: "TODO",
+        bodyV2: { markdown: `${draft}\n\n${issue}` },
+        createdAt: "2026-11-18T16:30:00.000Z",
+        dueAt: "2026-11-21T00:00:00.000Z",
+        roomId: null,
+        waitsOnId: null,
+        waitsOnIssue: EMPTY_LINK,
+        ticket: "19966",
+        assigneeId: "m1",
+      });
+    });
+
+    it("moves the note onto the sent mail and lays the date from the send, in one write", async () => {
+      await run("sent", "drafted", "--sent-mail", sentMail, "--sent-on", "2026-11-19");
+      expect(updates).toEqual([
+        [
+          "drafted",
+          {
+            bodyV2: {
+              markdown: `Rests on: [our mail to Sebastian](${sentMail})\n\n${issue}`,
+            },
+            // Written 18.11, due 21.11: three days, laid from the send of 19.11.
+            dueAt: "2026-11-22T00:00:00.000Z",
+          },
+        ],
+      ]);
+      expect(rendered).toMatchObject({ title: "Sebastian owes his yes", ticket: "19966" });
+    });
+
+    it("counts the day written in Europe/Berlin", async () => {
+      // 23:30 UTC on 18.11 is 19.11 in Berlin: two days to 21.11.
+      store.tasks!.get("drafted")!.createdAt = "2026-11-18T23:30:00.000Z";
+      await run("sent", "drafted", "--sent-mail", sentMail, "--sent-on", "2026-11-20");
+      expect(updates[0]![1].dueAt).toBe("2026-11-22T00:00:00.000Z");
+    });
+
+    it("moves only the note of a Task whose room is booked, and of one with no date", async () => {
+      store.tasks!.get("drafted")!.roomId = "e1";
+      await run("sent", "drafted", "--sent-mail", sentMail, "--sent-on", "2026-11-19");
+      store.tasks!.set("waiting", {
+        ...store.tasks!.get("drafted")!,
+        id: "waiting",
+        roomId: null,
+        dueAt: null,
+        waitsOnId: "t2",
+        bodyV2: { markdown: draft },
+      });
+      await run("sent", "waiting", "--sent-mail", sentMail, "--sent-on", "2026-11-19");
+      expect(updates.map(([, data]) => Object.keys(data))).toEqual([["bodyV2"], ["bodyV2"]]);
+    });
+
+    it("refuses a closed Task, a missing mail or day, a send before the Task was written, and writes nothing", async () => {
+      expect(
+        await refusal("sent", "done", "--sent-mail", sentMail, "--sent-on", "2026-11-19"),
+      ).toContain("a closed Task allows one move");
+      expect(await refusal("sent", "drafted", "--sent-on", "2026-11-19")).toContain(
+        "missing the sent mail",
+      );
+      expect(await refusal("sent", "drafted", "--sent-mail", sentMail)).toContain(
+        "missing the day the mail was sent",
+      );
+      expect(
+        await refusal("sent", "drafted", "--sent-mail", sentMail, "--sent-on", "2026-11-31"),
+      ).toContain("is not a day");
+      expect(
+        await refusal("sent", "drafted", "--sent-mail", sentMail, "--sent-on", "2026-11-17"),
+      ).toContain("before the day Task drafted was written");
+      expect(
+        await refusal(
+          "sent",
+          "drafted",
+          "--sent-mail",
+          "https://mail.google.com/mail/#drafts/d1",
+          "--sent-on",
+          "2026-11-19",
+        ),
+      ).toContain("already rests on");
+      expect(updates).toEqual([]);
     });
   });
 

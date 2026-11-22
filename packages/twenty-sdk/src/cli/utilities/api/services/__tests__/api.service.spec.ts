@@ -654,7 +654,7 @@ describe("ApiService", () => {
       readBack();
       const today = new Date();
       const dm = `${String(today.getDate()).padStart(2, "0")}.${String(today.getMonth() + 1).padStart(2, "0")}`;
-      const closed = `${note}\n\nClosed ${dm} · proof: [the reply](https://github.com/acme/deals/issues/2)`;
+      const closed = `${note}\n\nClosed ${dm} · proof: "We accept." — [the reply](https://github.com/acme/deals/issues/2)`;
 
       const judged = service.judgeWrites(
         [

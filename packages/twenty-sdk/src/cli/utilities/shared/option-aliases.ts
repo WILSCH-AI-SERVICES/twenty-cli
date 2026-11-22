@@ -96,6 +96,8 @@ export const OPTION_ALIAS_OVERRIDES: Readonly<Record<string, readonly string[]>>
   title: ["tit"],
   // CCI#1341: tasks create — "owes" would derive "ws", workspace's alias.
   owes: ["ow"],
+  // CCI#1363: tasks close — "proof-line" would derive "pl", proof-label's alias.
+  "proof-line": ["pln"],
 });
 
 export function collectOptionAliasEntries(program: Command): OptionAliasEntry[] {
