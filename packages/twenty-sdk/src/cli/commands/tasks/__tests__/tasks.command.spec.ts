@@ -520,8 +520,8 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
   });
 
   describe("sent — the eighth move (CCI#1363)", () => {
-    const draft = "Rests on: [our mail to Sebastian](https://mail.google.com/mail/#drafts/d1)";
-    const sentMail = "https://mail.google.com/mail/#sent/s1";
+    const draft = "Rests on: [our mail to Sebastian](https://example.com/mail/#drafts/d1)";
+    const sentMail = "https://example.com/mail/#sent/s1";
     const issue =
       "Issue: [DaveX2001/deliverable-tracking#3388](https://github.com/DaveX2001/deliverable-tracking/issues/3388)";
     beforeEach(() => {
@@ -600,7 +600,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
           "sent",
           "drafted",
           "--sent-mail",
-          "https://mail.google.com/mail/#drafts/d1",
+          "https://example.com/mail/#drafts/d1",
           "--sent-on",
           "2026-11-19",
         ),
