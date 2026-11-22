@@ -451,6 +451,28 @@ export function registerTasksCommand(program: Command): void {
         afterRead: true,
       });
     }
+    // Reopened, it is an open Task, and an open Task has an owner (CCI#1361): the one it
+    // kept, else the one --assignee names, else its note's issue's assignee. Asked first, so
+    // a Task nobody can own is refused for that whatever else its note holds.
+    let ownerId: string | undefined;
+    if (assignee !== undefined || !stored.assigneeId) {
+      const owner = await ownerOf({
+        assignee,
+        issue: noteIssue(stored.bodyV2?.markdown),
+        members: await listMembers(services),
+      });
+      if ("problem" in owner) {
+        refuse(
+          [
+            `reopened, Task ${id} would stand open with no owner — --assignee or the assignee of the issue its note names gives it one`,
+            owner.problem,
+            `Task ${id} stays done`,
+          ],
+          { afterRead: true },
+        );
+      }
+      ownerId = owner.memberId;
+    }
     const reopened = reopenNote(stored.bodyV2?.markdown ?? "", why!);
     if (!reopened.markdown) {
       refuse([...reopened.problems, `Task ${id} is unchanged`], { afterRead: true });
@@ -477,30 +499,11 @@ export function registerTasksCommand(program: Command): void {
       }
     }
 
-    // Reopened, it is an open Task, and an open Task has an owner (CCI#1361): the one it
-    // kept, else the one --assignee names, else its note's issue's assignee.
     const patch: Record<string, unknown> = {
       status: "TODO",
       bodyV2: { markdown: reopened.markdown! },
     };
-    if (assignee !== undefined || !stored.assigneeId) {
-      const owner = await ownerOf({
-        assignee,
-        issue: noteIssue(stored.bodyV2?.markdown),
-        members: await listMembers(services),
-      });
-      if ("problem" in owner) {
-        refuse(
-          [
-            `reopened, Task ${id} would stand open with no owner — --assignee or the assignee of the issue its note names gives it one`,
-            owner.problem,
-            `Task ${id} stays done`,
-          ],
-          { afterRead: true },
-        );
-      }
-      patch.assigneeId = owner.memberId;
-    }
+    if (ownerId) patch.assigneeId = ownerId;
 
     await services.records.update("tasks", id, patch);
 

@@ -684,6 +684,22 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       expect(message).toContain("Task orphan stays done");
       expect(updates).toEqual([]);
 
+      // The owner is asked before the note is read: a close in a shape this build does not
+      // parse (CCI#1363's quoted proof line) is still refused for its owner first.
+      store.tasks!.set("quoted", {
+        id: "quoted",
+        title: "Quoted",
+        status: "DONE",
+        assigneeId: null,
+        bodyV2: {
+          markdown: closed(2).replace("proof: [", 'proof: "the line" — ['),
+        },
+      });
+      expect(await refusal("reopen", "quoted", "--why", "closed in error")).toContain(
+        "would stand open with no owner",
+      );
+      expect(updates).toEqual([]);
+
       await run("reopen", "orphan", "--why", "closed in error", "--assignee", "m2");
       expect(updates[0]![1]).toMatchObject({ status: "TODO", assigneeId: "m2" });
 
