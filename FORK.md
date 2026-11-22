@@ -89,6 +89,14 @@ A binary whose `--version` prints bare `0.1.14` is the upstream tarball, not thi
   `tasks create` takes `--owes`, `--owes-person` and `--room`. A closed Task refuses every
   move but the reopen, and the guard lets a done Task's note be rewritten by its reopening
   alone — the rule the store holds in crm-2990-twenty `sql/house-shape.sql`.
+- A Task's *moves by*, room or mail (DaveX2001/claude-code-improvements#1362): `tasks create
+  --moves-by room|mail` sets it as the Task is written, left empty when nobody chose (the
+  store's field, crm-2990-twenty `config/part5.json`, has two values and no default), and
+  `tasks set-moves-by <id> room --room <event>` / `mail --due <day>` turns an open Task in one
+  write with what the turn needs — the room and its day, or the room cleared and the date —
+  refusing a turn without it and any change on a closed Task. `tasks create --waits-on` takes
+  a GitHub issue (owner/repo#N or its address, never a bare number) as well as a Task, written
+  in the create's one write, and refuses `--due` beside it.
 - `twenty tasks migrate --record <path> [--dry-run]` runs the one migration of A Task's Life
   Part 5 (DaveX2001/claude-code-improvements#1342) from its before→after record, versioned in
   crm-2990-twenty `migrations/`: who owes and the room into their fields, each title cut to

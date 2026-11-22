@@ -96,6 +96,8 @@ export const OPTION_ALIAS_OVERRIDES: Readonly<Record<string, readonly string[]>>
   title: ["tit"],
   // CCI#1341: tasks create — "owes" would derive "ws", workspace's alias.
   owes: ["ow"],
+  // CCI#1362: tasks create — "moves-by" would derive "mb", max-bytes's alias.
+  "moves-by": ["mvb"],
 });
 
 export function collectOptionAliasEntries(program: Command): OptionAliasEntry[] {

@@ -500,6 +500,173 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
     });
   });
 
+  describe("create — moves by and the wait (CCI#1362)", () => {
+    const base = [
+      "create",
+      "--title",
+      "The answer to our offer",
+      "--rests-on",
+      "https://example.com/mail/abc",
+      "--rests-on-label",
+      "our mail 18.10",
+      "--company",
+      "c1",
+    ];
+
+    it("writes moves by room or mail as given, and leaves it unwritten when none is given", async () => {
+      await run(...base, "--moves-by", "room");
+      await run(
+        ...base.map((a) => (a === "The answer to our offer" ? "Second" : a)),
+        "--moves-by",
+        "MAIL",
+      );
+      await run(...base.map((a) => (a === "The answer to our offer" ? "Third" : a)));
+
+      expect(creates.filter(([o]) => o === "tasks").map(([, d]) => d.movesBy)).toEqual([
+        "ROOM",
+        "MAIL",
+        undefined,
+      ]);
+      expect(creates.find(([o, d]) => o === "tasks" && d.title === "Third")![1]).not.toHaveProperty(
+        "movesBy",
+      );
+      expect(rendered).toMatchObject({ movesBy: null });
+    });
+
+    it("refuses a third value for moves by, and writes nothing", async () => {
+      expect(await refusal(...base, "--moves-by", "phone")).toContain(
+        'moves by "phone" is neither room nor mail',
+      );
+      expect(creates).toEqual([]);
+    });
+
+    it("writes a wait on an issue, as owner/repo#N or its address, in the create's one write", async () => {
+      await run(...base, "--waits-on", "DaveX2001/claude-code-improvements#1362");
+      await run(
+        ...base.map((a) => (a === "The answer to our offer" ? "Second" : a)),
+        "--waits-on",
+        "https://github.com/DaveX2001/claude-code-improvements/issues/1362",
+      );
+
+      const issue = {
+        primaryLinkUrl: "https://github.com/DaveX2001/claude-code-improvements/issues/1362",
+        primaryLinkLabel: "DaveX2001/claude-code-improvements#1362",
+        secondaryLinks: [],
+      };
+      const tasks = creates.filter(([o]) => o === "tasks").map(([, d]) => d);
+      expect(tasks).toHaveLength(2);
+      for (const data of tasks) {
+        expect(data.waitsOnIssue).toEqual(issue);
+        expect(data).not.toHaveProperty("waitsOnId");
+        expect(data).not.toHaveProperty("dueAt");
+      }
+      expect(updates).toEqual([]);
+    });
+
+    it("refuses a bare number, a Task not on the instance, and a date beside a wait, writing nothing", async () => {
+      expect(await refusal(...base, "--waits-on", "1362")).toContain("is a bare number");
+      expect(await refusal(...base, "--waits-on", "#1362")).toContain("is a bare number");
+      expect(await refusal(...base, "--waits-on", "ghost")).toContain(
+        "--waits-on names Task ghost, which is not on the instance",
+      );
+      expect(await refusal(...base, "--waits-on", "t1", "--due", "2026-12-01")).toContain(
+        "a Task that waits carries no date",
+      );
+      expect(creates).toEqual([]);
+    });
+
+    it("names moves by and the wait in tasks --help and tasks create --help", () => {
+      const tasks = program.commands.find((c) => c.name() === "tasks")!;
+      const createCommand = tasks.commands.find((c) => c.name() === "create")!;
+      for (const help of [tasks.helpInformation(), createCommand.helpInformation()]) {
+        const flat = help.replace(/\s+/g, " ");
+        expect(flat).toContain("room, mail, or empty when nobody chose");
+        expect(flat).toContain("set-moves-by");
+        expect(flat).toContain("a turn to room needs --room");
+        expect(flat).toContain("a turn to mail needs --due");
+        expect(flat).toContain("create --waits-on takes a Task");
+        expect(flat).toContain("or a GitHub issue (owner/repo#N or its github.com address");
+      }
+    });
+  });
+
+  describe("set-moves-by (CCI#1362)", () => {
+    beforeEach(() => {
+      store.calendarEvents!.set("free", {
+        id: "free",
+        title: "Free room",
+        startsAt: "2026-12-03T09:00:00.000Z",
+        deletedAt: null,
+      });
+      store.calendarEvents!.set("nostart", {
+        id: "nostart",
+        title: "No start",
+        startsAt: null,
+        deletedAt: null,
+      });
+      store.tasks!.get("t1")!.movesBy = "MAIL";
+      store.tasks!.get("roomed")!.movesBy = "ROOM";
+    });
+
+    it("turns a mail Task to room naming the room: room, the room and its day in one write", async () => {
+      await run("set-moves-by", "t1", "room", "--room", "free");
+
+      expect(updates).toEqual([
+        ["t1", { movesBy: "ROOM", roomId: "free", dueAt: "2026-12-03T00:00:00.000Z" }],
+      ]);
+      expect(rendered).toMatchObject({ movesBy: "ROOM", room: { id: "free", day: "2026-12-03" } });
+    });
+
+    it("turns a room Task to mail with a date: mail, the room cleared and the date in one write", async () => {
+      await run("set-moves-by", "roomed", "mail", "--due", "2026-12-10");
+
+      expect(updates).toEqual([
+        ["roomed", { movesBy: "MAIL", roomId: null, dueAt: "2026-12-10T00:00:00.000Z" }],
+      ]);
+      expect(rendered).toMatchObject({ movesBy: "MAIL", room: null });
+    });
+
+    it("refuses a turn to room naming no room, and a turn to mail giving no date, writing nothing", async () => {
+      expect(await refusal("set-moves-by", "t1", "room")).toContain(
+        "a turn to room names its room",
+      );
+      expect(await refusal("set-moves-by", "roomed", "mail")).toContain(
+        "a turn to mail gives the Task its date",
+      );
+      expect(await refusal("set-moves-by", "roomed", "mail", "--due", "soon")).toContain(
+        "is not a day",
+      );
+      expect(
+        await refusal("set-moves-by", "roomed", "mail", "--due", "2026-12-10", "--room", "e1"),
+      ).toContain("--room is not taken");
+      expect(
+        await refusal("set-moves-by", "t1", "room", "--room", "free", "--due", "2026-12-10"),
+      ).toContain("--due is not taken");
+      expect(await refusal("set-moves-by", "t1", "phone")).toContain("neither room nor mail");
+      expect(updates).toEqual([]);
+    });
+
+    it("refuses a room the instance lacks or that gives no day, a waiting Task turned to mail, and a closed Task", async () => {
+      expect(await refusal("set-moves-by", "t1", "room", "--room", "gone")).toContain(
+        "is not on the instance",
+      );
+      expect(await refusal("set-moves-by", "t1", "room", "--room", "nostart")).toContain(
+        "gives the Task no day",
+      );
+      store.tasks!.get("t2")!.waitsOnId = "t1";
+      expect(await refusal("set-moves-by", "t2", "mail", "--due", "2026-12-10")).toContain(
+        "carries no date while it waits",
+      );
+      expect(await refusal("set-moves-by", "done", "mail", "--due", "2026-12-10")).toContain(
+        "a closed Task allows one move, its reopening",
+      );
+      expect(await refusal("set-moves-by", "done", "room", "--room", "free")).toContain(
+        "a closed Task allows one move",
+      );
+      expect(updates).toEqual([]);
+    });
+  });
+
   describe("a second open Task with the same title on a Company (CCI#1346)", () => {
     const create = (title: string, on: string[]) => [
       "create",
@@ -579,6 +746,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       "create",
       "note",
       "close",
+      "set-moves-by \\[options\\] <id> <how>",
       "reopen \\[options\\] <id>",
       "set-due \\[options\\] <id> <date>",
       "set-assignee \\[options\\] <id> \\[workspaceMemberId\\]",
