@@ -118,6 +118,15 @@ export function parseIssueRef(value: string): IssueRef | undefined {
   return undefined;
 }
 
+/** The GitHub issue a note's `Issue:` line names, or undefined when it names none. */
+export function noteIssue(markdown: string | undefined | null): IssueRef | undefined {
+  for (const line of noteLines(markdown ?? "")) {
+    const issue = line.match(ISSUE);
+    if (issue) return { owner: issue[1]!, repo: issue[2]!, number: Number(issue[3]) };
+  }
+  return undefined;
+}
+
 function issueUrl(ref: IssueRef): string {
   return `https://github.com/${ref.owner}/${ref.repo}/issues/${ref.number}`;
 }

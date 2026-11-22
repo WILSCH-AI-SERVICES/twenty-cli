@@ -1,8 +1,9 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CliError } from "../../../utilities/errors/cli-error";
 import { formatDayMonth } from "../../../utilities/house-rules/task-note";
+import { github, githubViaGh } from "../../../utilities/house-rules/task-owner";
 import { REFUSED } from "../../../utilities/house-rules/write-guard";
 import { registerTasksCommand } from "../tasks.command";
 
@@ -39,6 +40,12 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
   let creates: Array<[string, Record<string, unknown>]>;
   let deletes: Array<[string, string]>;
   let reads: Array<[string, string | undefined]>;
+  let assigned: Record<string, string[]>;
+  let githubReads: string[];
+
+  afterEach(() => {
+    github.reader = githubViaGh;
+  });
 
   beforeEach(() => {
     program = new Command();
@@ -108,7 +115,11 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
         ["o1", { id: "o1", companyId: "c1" }],
         ["o2", { id: "o2", companyId: null }],
       ]),
-      workspaceMembers: new Map([["m1", { id: "m1" }]]),
+      workspaceMembers: new Map([
+        ["m1", { id: "m1", userEmail: "david@wilsch-ai.com" }],
+        ["m2", { id: "m2", userEmail: "marius@wilsch-ai.com" }],
+        ["m3", { id: "m3", userEmail: "someone@example.com" }],
+      ]),
       taskTargets: new Map([["tt1", { id: "tt1", taskId: "t1", targetCompanyId: "c1" }]]),
     };
     let next = 0;
@@ -132,6 +143,27 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       if (!record) throw notFound();
       return { data: { data: { [SINGULAR[object!]!]: { ...record } } } };
     });
+    // GitHub as the fixtures stand: who each issue is assigned to, and public emails.
+    assigned = {
+      "DaveX2001/deliverable-tracking#3388": ["DaveX2001"],
+      "DaveX2001/deliverable-tracking#1": ["MariusWilsch"],
+      "DaveX2001/deliverable-tracking#2": [],
+      "DaveX2001/deliverable-tracking#3": ["DaveX2001", "MariusWilsch"],
+      "DaveX2001/deliverable-tracking#4": ["outsider"],
+      "DaveX2001/deliverable-tracking#5": ["someone"],
+    };
+    githubReads = [];
+    github.reader = {
+      async issueAssignees(ref) {
+        const key = `${ref.owner}/${ref.repo}#${ref.number}`;
+        githubReads.push(key);
+        if (!(key in assigned)) throw new Error("HTTP 404: Not Found");
+        return assigned[key]!;
+      },
+      async publicEmail(login) {
+        return login === "someone" ? "someone@example.com" : undefined;
+      },
+    };
     mockCreateCommandContext.mockReset();
     mockCreateCommandContext.mockResolvedValue({
       globalOptions: { output: "json", query: undefined },
@@ -139,6 +171,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
         api: { get },
         records: {
           listAll: vi.fn(async (object: string, options: { filter?: string }) => {
+            if (object === "workspaceMembers") return { data: [...store[object]!.values()] };
             const companyId = /^companyId\[eq\]:"(.*)"$/.exec(options.filter ?? "")?.[1];
             reads.push([object, options.filter]);
             return {
@@ -293,13 +326,19 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
   });
 
   describe("set-assignee", () => {
-    it("gives an open Task a new assignee, and clears it", async () => {
+    it("gives an open Task a new owner, and refuses to clear it or to name nobody (CCI#1361)", async () => {
+      store.tasks!.get("t1")!.assigneeId = "m2";
       await run("set-assignee", "t1", "m1");
-      await run("set-assignee", "t2", "--clear");
-      expect(updates).toEqual([
-        ["t1", { assigneeId: "m1" }],
-        ["t2", { assigneeId: null }],
-      ]);
+      expect(updates).toEqual([["t1", { assigneeId: "m1" }]]);
+      expect(rendered).toMatchObject({ id: "t1", assigneeId: "m1" });
+
+      expect(await refusal("set-assignee", "t1", "--clear")).toContain(
+        "an open Task has an owner — it is changed, never cleared",
+      );
+      expect(await refusal("set-assignee", "t1", "m2", "--clear")).toContain("never cleared");
+      expect(await refusal("set-assignee", "t1")).toContain("pass the workspace member");
+      expect(updates).toHaveLength(1);
+      expect(store.tasks!.get("t1")!.assigneeId).toBe("m1");
     });
 
     it("refuses a member the instance does not hold, and a done Task", async () => {
@@ -379,7 +418,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
 
       const line = `Closed 14.11 in error — reopened ${formatDayMonth(new Date())}: the reply was on another matter · proof was: [their reply 14.11](https://example.com/mail/reply)`;
       expect(updates).toEqual([
-        ["done", { status: "TODO", bodyV2: { markdown: `${NOTE}\n\n${line}` } }],
+        ["done", { status: "TODO", bodyV2: { markdown: `${NOTE}\n\n${line}` }, assigneeId: "m1" }],
       ]);
       expect(creates).toEqual([]);
       expect(rendered).toMatchObject({ id: "done", status: "TODO" });
@@ -434,6 +473,8 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
             bodyV2: {
               markdown: `${NOTE}\n\nClosed 14.11 in error — reopened ${formatDayMonth(new Date())}: the yes was for another offer · proof was: "Yes, we go ahead." — [their reply 14.11](https://example.com/mail/reply)`,
             },
+            // CCI#1361: reopen writes the owner it resolved in the same write.
+            assigneeId: "m1",
           },
         ],
       ]);
@@ -648,6 +689,175 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
     });
   });
 
+  describe("create — moves by and the wait (CCI#1362)", () => {
+    const base = [
+      "create",
+      "--title",
+      "The answer to our offer",
+      "--rests-on",
+      "https://example.com/mail/abc",
+      "--rests-on-label",
+      "our mail 18.10",
+      "--assignee",
+      "m2",
+      "--company",
+      "c1",
+    ];
+
+    it("writes moves by room or mail as given, and leaves it unwritten when none is given", async () => {
+      await run(...base, "--moves-by", "room");
+      await run(
+        ...base.map((a) => (a === "The answer to our offer" ? "Second" : a)),
+        "--moves-by",
+        "MAIL",
+      );
+      await run(...base.map((a) => (a === "The answer to our offer" ? "Third" : a)));
+
+      expect(creates.filter(([o]) => o === "tasks").map(([, d]) => d.movesBy)).toEqual([
+        "ROOM",
+        "MAIL",
+        undefined,
+      ]);
+      expect(creates.find(([o, d]) => o === "tasks" && d.title === "Third")![1]).not.toHaveProperty(
+        "movesBy",
+      );
+      expect(rendered).toMatchObject({ movesBy: null });
+    });
+
+    it("refuses a third value for moves by, and writes nothing", async () => {
+      expect(await refusal(...base, "--moves-by", "phone")).toContain(
+        'moves by "phone" is neither room nor mail',
+      );
+      expect(creates).toEqual([]);
+    });
+
+    it("writes a wait on an issue, as owner/repo#N or its address, in the create's one write", async () => {
+      await run(...base, "--waits-on", "DaveX2001/claude-code-improvements#1362");
+      await run(
+        ...base.map((a) => (a === "The answer to our offer" ? "Second" : a)),
+        "--waits-on",
+        "https://github.com/DaveX2001/claude-code-improvements/issues/1362",
+      );
+
+      const issue = {
+        primaryLinkUrl: "https://github.com/DaveX2001/claude-code-improvements/issues/1362",
+        primaryLinkLabel: "DaveX2001/claude-code-improvements#1362",
+        secondaryLinks: [],
+      };
+      const tasks = creates.filter(([o]) => o === "tasks").map(([, d]) => d);
+      expect(tasks).toHaveLength(2);
+      for (const data of tasks) {
+        expect(data.waitsOnIssue).toEqual(issue);
+        expect(data).not.toHaveProperty("waitsOnId");
+        expect(data).not.toHaveProperty("dueAt");
+      }
+      expect(updates).toEqual([]);
+    });
+
+    it("refuses a bare number, a Task not on the instance, and a date beside a wait, writing nothing", async () => {
+      expect(await refusal(...base, "--waits-on", "1362")).toContain("is a bare number");
+      expect(await refusal(...base, "--waits-on", "#1362")).toContain("is a bare number");
+      expect(await refusal(...base, "--waits-on", "ghost")).toContain(
+        "--waits-on names Task ghost, which is not on the instance",
+      );
+      expect(await refusal(...base, "--waits-on", "t1", "--due", "2026-12-01")).toContain(
+        "a Task that waits carries no date",
+      );
+      expect(creates).toEqual([]);
+    });
+
+    it("names moves by and the wait in tasks --help and tasks create --help", () => {
+      const tasks = program.commands.find((c) => c.name() === "tasks")!;
+      const createCommand = tasks.commands.find((c) => c.name() === "create")!;
+      for (const help of [tasks.helpInformation(), createCommand.helpInformation()]) {
+        const flat = help.replace(/\s+/g, " ");
+        expect(flat).toContain("room, mail, or empty when nobody chose");
+        expect(flat).toContain("set-moves-by");
+        expect(flat).toContain("a turn to room needs --room");
+        expect(flat).toContain("a turn to mail needs --due");
+        expect(flat).toContain("create --waits-on takes a Task");
+        expect(flat).toContain("or a GitHub issue (owner/repo#N or its github.com address");
+      }
+    });
+  });
+
+  describe("set-moves-by (CCI#1362)", () => {
+    beforeEach(() => {
+      store.calendarEvents!.set("free", {
+        id: "free",
+        title: "Free room",
+        startsAt: "2026-12-03T09:00:00.000Z",
+        deletedAt: null,
+      });
+      store.calendarEvents!.set("nostart", {
+        id: "nostart",
+        title: "No start",
+        startsAt: null,
+        deletedAt: null,
+      });
+      store.tasks!.get("t1")!.movesBy = "MAIL";
+      store.tasks!.get("roomed")!.movesBy = "ROOM";
+    });
+
+    it("turns a mail Task to room naming the room: room, the room and its day in one write", async () => {
+      await run("set-moves-by", "t1", "room", "--room", "free");
+
+      expect(updates).toEqual([
+        ["t1", { movesBy: "ROOM", roomId: "free", dueAt: "2026-12-03T00:00:00.000Z" }],
+      ]);
+      expect(rendered).toMatchObject({ movesBy: "ROOM", room: { id: "free", day: "2026-12-03" } });
+    });
+
+    it("turns a room Task to mail with a date: mail, the room cleared and the date in one write", async () => {
+      await run("set-moves-by", "roomed", "mail", "--due", "2026-12-10");
+
+      expect(updates).toEqual([
+        ["roomed", { movesBy: "MAIL", roomId: null, dueAt: "2026-12-10T00:00:00.000Z" }],
+      ]);
+      expect(rendered).toMatchObject({ movesBy: "MAIL", room: null });
+    });
+
+    it("refuses a turn to room naming no room, and a turn to mail giving no date, writing nothing", async () => {
+      expect(await refusal("set-moves-by", "t1", "room")).toContain(
+        "a turn to room names its room",
+      );
+      expect(await refusal("set-moves-by", "roomed", "mail")).toContain(
+        "a turn to mail gives the Task its date",
+      );
+      expect(await refusal("set-moves-by", "roomed", "mail", "--due", "soon")).toContain(
+        "is not a day",
+      );
+      expect(
+        await refusal("set-moves-by", "roomed", "mail", "--due", "2026-12-10", "--room", "e1"),
+      ).toContain("--room is not taken");
+      expect(
+        await refusal("set-moves-by", "t1", "room", "--room", "free", "--due", "2026-12-10"),
+      ).toContain("--due is not taken");
+      expect(await refusal("set-moves-by", "t1", "phone")).toContain("neither room nor mail");
+      expect(updates).toEqual([]);
+    });
+
+    it("refuses a room the instance lacks or that gives no day, a waiting Task turned to mail, and a closed Task", async () => {
+      expect(await refusal("set-moves-by", "t1", "room", "--room", "gone")).toContain(
+        "is not on the instance",
+      );
+      expect(await refusal("set-moves-by", "t1", "room", "--room", "nostart")).toContain(
+        "gives the Task no day",
+      );
+      store.tasks!.get("t2")!.waitsOnId = "t1";
+      expect(await refusal("set-moves-by", "t2", "mail", "--due", "2026-12-10")).toContain(
+        "carries no date while it waits",
+      );
+      expect(await refusal("set-moves-by", "done", "mail", "--due", "2026-12-10")).toContain(
+        "a closed Task allows one move, its reopening",
+      );
+      expect(await refusal("set-moves-by", "done", "room", "--room", "free")).toContain(
+        "a closed Task allows one move",
+      );
+      expect(updates).toEqual([]);
+    });
+  });
+
   describe("a second open Task with the same title on a Company (CCI#1346)", () => {
     const create = (title: string, on: string[]) => [
       "create",
@@ -657,6 +867,8 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       "https://example.com/mail/abc",
       "--rests-on-label",
       "our mail 18.10",
+      "--assignee",
+      "m2",
       ...on,
     ];
 
@@ -720,6 +932,120 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
     });
   });
 
+  describe("the owner: the writer's, else its issue's assignee, else refused (CCI#1361)", () => {
+    const write = (...extra: string[]) => [
+      "create",
+      "--title",
+      "The answer to our offer",
+      "--rests-on",
+      "https://example.com/mail/abc",
+      "--rests-on-label",
+      "our mail 18.10",
+      "--company",
+      "c2",
+      ...extra,
+    ];
+
+    it("takes the assignee of the issue its note names, for each carrier", async () => {
+      await run(...write("--issue", "DaveX2001/deliverable-tracking#3388"));
+      await run(...write("--issue", "#1"));
+      const tasks = creates.filter(([object]) => object === "tasks").map(([, data]) => data);
+      expect(tasks.map((t) => t.assigneeId)).toEqual(["m1", "m2"]);
+      expect(rendered).toMatchObject({ assigneeId: "m2" });
+    });
+
+    it("writes the member --assignee names, whatever the issue's assignee, without asking GitHub", async () => {
+      await run(...write("--issue", "#1", "--assignee", "m1"));
+      expect(creates[0]![1]).toMatchObject({ assigneeId: "m1" });
+      expect(githubReads).toEqual([]);
+    });
+
+    it("maps a login outside the house's table by its public email", async () => {
+      await run(...write("--issue", "#5"));
+      expect(creates[0]![1]).toMatchObject({ assigneeId: "m3" });
+    });
+
+    it("refuses a Task nobody can own, saying --assignee names the owner, and writes nothing", async () => {
+      const none = await refusal(...write());
+      expect(none).toContain("who owns the Task cannot be told");
+      expect(none).toContain("--assignee names the owner");
+
+      expect(await refusal(...write("--issue", "#2"))).toContain(
+        "DaveX2001/deliverable-tracking#2 has no assignee",
+      );
+      const two = await refusal(...write("--issue", "#3"));
+      expect(two).toContain("has 2 assignees, DaveX2001 and MariusWilsch");
+      expect(two).toContain("picks none of them");
+      expect(await refusal(...write("--issue", "#4"))).toContain(
+        "assignee outsider is no member of Twenty's workspace",
+      );
+      expect(await refusal(...write("--issue", "#99"))).toContain("could not be read from GitHub");
+      expect(await refusal(...write("--assignee", "ghost"))).toContain(
+        "--assignee names workspace member ghost, which is not on the instance",
+      );
+      for (const message of [none, two]) expect(message).toContain("nothing was written");
+      expect(creates).toEqual([]);
+    });
+
+    it("reopens a Task with no owner only with one: --assignee, else its issue's, else it stays done", async () => {
+      const closed = (issue: number) =>
+        `Rests on: [our mail 18.10](https://example.com/mail/abc)\n\nIssue: [DaveX2001/deliverable-tracking#${issue}](https://github.com/DaveX2001/deliverable-tracking/issues/${issue})\n\n${CLOSED}`;
+      store.tasks!.set("orphan", {
+        id: "orphan",
+        title: "Nobody's",
+        status: "DONE",
+        assigneeId: null,
+        bodyV2: { markdown: closed(2) },
+      });
+      const message = await refusal("reopen", "orphan", "--why", "closed in error");
+      expect(message).toContain("would stand open with no owner");
+      expect(message).toContain("--assignee or the assignee of the issue its note names");
+      expect(message).toContain("Task orphan stays done");
+      expect(updates).toEqual([]);
+
+      // The owner is asked before the note is read: a close in a shape this build does not
+      // parse (CCI#1363's quoted proof line) is still refused for its owner first.
+      store.tasks!.set("quoted", {
+        id: "quoted",
+        title: "Quoted",
+        status: "DONE",
+        assigneeId: null,
+        bodyV2: {
+          markdown: closed(2).replace("proof: [", 'proof: "the line" — ['),
+        },
+      });
+      expect(await refusal("reopen", "quoted", "--why", "closed in error")).toContain(
+        "would stand open with no owner",
+      );
+      expect(updates).toEqual([]);
+
+      await run("reopen", "orphan", "--why", "closed in error", "--assignee", "m2");
+      expect(updates[0]![1]).toMatchObject({ status: "TODO", assigneeId: "m2" });
+
+      store.tasks!.set("owned", {
+        id: "owned",
+        title: "Owned",
+        status: "DONE",
+        assigneeId: "m2",
+        bodyV2: { markdown: closed(2) },
+      });
+      await run("reopen", "owned", "--why", "closed in error");
+      expect(updates[1]![1]).not.toHaveProperty("assigneeId");
+      expect(store.tasks!.get("owned")).toMatchObject({ status: "TODO", assigneeId: "m2" });
+    });
+
+    it("says the rule in tasks --help and tasks create --help", () => {
+      const tasks = program.commands.find((c) => c.name() === "tasks")!;
+      const createCommand = tasks.commands.find((c) => c.name() === "create")!;
+      for (const help of [tasks.helpInformation(), createCommand.helpInformation()]) {
+        const flat = help.replace(/\s+/g, " ");
+        expect(flat).toContain("An open Task has an owner");
+        expect(flat).toContain("else the assignee of the GitHub issue its note names");
+        expect(flat).toContain("the write is refused");
+      }
+    });
+  });
+
   it("lists every move, noun then verb, in tasks --help", () => {
     const tasks = program.commands.find((c) => c.name() === "tasks")!;
     const help = tasks.helpInformation();
@@ -727,6 +1053,7 @@ describe("tasks command — every move a Task allows (#3388, CCI#1341)", () => {
       "create",
       "note",
       "close",
+      "set-moves-by \\[options\\] <id> <how>",
       "reopen \\[options\\] <id>",
       "set-due \\[options\\] <id> <date>",
       "set-assignee \\[options\\] <id> \\[workspaceMemberId\\]",
