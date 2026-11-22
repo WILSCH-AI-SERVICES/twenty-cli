@@ -19,12 +19,14 @@ import {
   emitOpenNote,
   isAddress,
   labelProblem,
+  noteIssue,
   parseIssueRef,
   reasonProblem,
   reopenLines,
   reopenNote,
   type IssueRef,
 } from "../../utilities/house-rules/task-note";
+import { OWNER_RULE, ownerOf, type WorkspaceMember } from "../../utilities/house-rules/task-owner";
 import {
   standingProblem,
   standingTasks,
@@ -199,6 +201,12 @@ function openNoteFrom(options: TaskNoteOptions, missing: string[]): string | und
  *   a new title   an open Task is never re-titled, by any command or raw route
  *   a second Task `create`, and `reopen`, refuse an open Task whose title an open Task on
  *                 the same Company already carries, and print that Task: id, title, date
+ *
+ * And the owner (CCI#1361, `utilities/house-rules/task-owner.ts`): an open Task has one.
+ * `create` writes the member `--assignee` names, else the assignee of the issue `--issue`
+ * names, and refuses before any write when neither tells; `reopen` gives a Task with no
+ * owner one the same way, or it stays done; `set-assignee` changes the owner and refuses
+ * `--clear`. The rule is said in the help below, its one home (OWNER_RULE).
  */
 const TITLE_RULES =
   "An open Task's title does not change: a changed owing closes the Task on its proof and writes the next one. A second open Task with the same title on a Company is refused (surrounding spaces aside), by create and by reopen, showing the Task that stands (its id, title and date); a Task closed with that title does not count.";
@@ -207,14 +215,14 @@ export function registerTasksCommand(program: Command): void {
   const tasks = program
     .command("tasks")
     .description(
-      `Tasks with their note in the house's one shape, and every move a Task allows: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and reopen. ${TITLE_RULES}`,
+      `Tasks with their note in the house's one shape, and every move a Task allows: set-due, set-assignee, wait-on, set-ticket, set-room, retarget, and reopen. ${OWNER_RULE} ${TITLE_RULES}`,
     );
   applyGlobalOptions(tasks);
 
   const create = tasks
     .command("create")
     .description(
-      `Write an open Task on a Company or an Opportunity, its note in the one shape. ${TITLE_RULES}`,
+      `Write an open Task on a Company or an Opportunity, its note in the one shape. ${OWNER_RULE} ${TITLE_RULES}`,
     )
     .option(
       "--title <text>",
@@ -226,7 +234,10 @@ export function registerTasksCommand(program: Command): void {
     .option("--company <id>", "The Company the Task is on")
     .option("--opportunity <id>", "The Opportunity the Task is on")
     .option("--due <date>", "Due date (ISO 8601); not with --room, whose event gives the date")
-    .option("--assignee <workspaceMemberId>", "Who acts")
+    .option(
+      "--assignee <workspaceMemberId>",
+      "Who owns it, the workspace member who acts; without it, the assignee of the --issue — and with neither, the Task is refused",
+    )
     .option("--waits-on <taskId>", "The Task this one waits on (it must exist)")
     .option("--ticket <number>", "Its ticket at the counterparty, e.g. 19966")
     .option("--owes <side>", "Who owes it: house or other-side")
@@ -290,6 +301,13 @@ export function registerTasksCommand(program: Command): void {
         companyId = opportunity.companyId;
       }
     }
+    // Its owner, before anything is written (CCI#1361): the named member, else the issue's.
+    const owner = await ownerOf({
+      assignee: options.assignee,
+      issue: options.issue === undefined ? undefined : parseIssueRef(options.issue),
+      members: await listMembers(services),
+    });
+    if ("problem" in owner) absent.push(owner.problem);
     if (absent.length > 0) refuse([...absent, "nothing was written"], { afterRead: true });
 
     if (companyId) {
@@ -307,7 +325,7 @@ export function registerTasksCommand(program: Command): void {
       bodyV2: { markdown: markdown! },
     };
     if (options.due) data.dueAt = options.due;
-    if (options.assignee) data.assigneeId = options.assignee;
+    data.assigneeId = (owner as { memberId: string }).memberId;
     if (waitsOn) data.waitsOnId = waitsOn;
     if (ticket !== undefined) data.ticket = ticket;
     if (owes) data.owes = owes;
@@ -413,12 +431,16 @@ export function registerTasksCommand(program: Command): void {
       "Undo a close made in error on the same Task: back to to do, the wrong close kept in its note as a dated line saying why",
     )
     .argument("<id>", "The done Task's id")
-    .option("--why <reason>", "Why the close was made in error, in one line");
+    .option("--why <reason>", "Why the close was made in error, in one line")
+    .option(
+      "--assignee <workspaceMemberId>",
+      "Who owns it reopened; needed when it has no owner and its note's issue gives none",
+    );
   applyGlobalOptions(reopen);
 
   reopen.action(async (id: string, _options: unknown, command: Command) => {
     const { globalOptions, services } = await createCommandContext(command);
-    const { why } = command.opts() as { why?: string };
+    const { why, assignee } = command.opts() as { why?: string; assignee?: string };
 
     const reason = reasonProblem(why);
     if (reason) refuse([reason, `Task ${id} is unchanged`]);
@@ -428,6 +450,28 @@ export function registerTasksCommand(program: Command): void {
       refuse([`Task ${id} is not done — there is no close to undo; it is unchanged`], {
         afterRead: true,
       });
+    }
+    // Reopened, it is an open Task, and an open Task has an owner (CCI#1361): the one it
+    // kept, else the one --assignee names, else its note's issue's assignee. Asked first, so
+    // a Task nobody can own is refused for that whatever else its note holds.
+    let ownerId: string | undefined;
+    if (assignee !== undefined || !stored.assigneeId) {
+      const owner = await ownerOf({
+        assignee,
+        issue: noteIssue(stored.bodyV2?.markdown),
+        members: await listMembers(services),
+      });
+      if ("problem" in owner) {
+        refuse(
+          [
+            `reopened, Task ${id} would stand open with no owner — --assignee or the assignee of the issue its note names gives it one`,
+            owner.problem,
+            `Task ${id} stays done`,
+          ],
+          { afterRead: true },
+        );
+      }
+      ownerId = owner.memberId;
     }
     const reopened = reopenNote(stored.bodyV2?.markdown ?? "", why!);
     if (!reopened.markdown) {
@@ -455,10 +499,13 @@ export function registerTasksCommand(program: Command): void {
       }
     }
 
-    await services.records.update("tasks", id, {
+    const patch: Record<string, unknown> = {
       status: "TODO",
       bodyV2: { markdown: reopened.markdown! },
-    });
+    };
+    if (ownerId) patch.assigneeId = ownerId;
+
+    await services.records.update("tasks", id, patch);
 
     await renderStored(services, id, globalOptions);
   });
@@ -511,11 +558,11 @@ export function registerTasksCommand(program: Command): void {
   const setAssignee = tasks
     .command("set-assignee")
     .description(
-      "Give an open Task a new assignee, the workspace member who acts, or clear it with --clear",
+      "Give an open Task a new owner, the workspace member who acts — an open Task's owner is changed, never cleared, so --clear is refused",
     )
     .argument("<id>", "The Task's id")
     .argument("[workspaceMemberId]", "The workspace member who acts")
-    .option("--clear", "Clear it: nobody at the house is named");
+    .option("--clear", "Refused: an open Task has an owner, so it is changed, never cleared");
   applyGlobalOptions(setAssignee);
 
   setAssignee.action(
@@ -524,9 +571,14 @@ export function registerTasksCommand(program: Command): void {
       const options = command.opts() as TaskClearOptions;
 
       const member = memberArg?.trim() || undefined;
-      if (!!options.clear === !!member) {
+      if (options.clear) {
         refuse([
-          `pass either the workspace member or --clear, not ${options.clear ? "both" : "neither"}; Task ${id} is unchanged`,
+          `an open Task has an owner — it is changed, never cleared; pass the workspace member who now owns it instead of --clear; Task ${id} keeps its owner`,
+        ]);
+      }
+      if (!member) {
+        refuse([
+          `pass the workspace member who now owns it — an open Task's owner is changed, never cleared; Task ${id} is unchanged`,
         ]);
       }
 
@@ -537,7 +589,7 @@ export function registerTasksCommand(program: Command): void {
         });
       }
 
-      await services.records.update("tasks", id, { assigneeId: member ?? null });
+      await services.records.update("tasks", id, { assigneeId: member });
 
       await renderStored(services, id, globalOptions);
     },
@@ -852,6 +904,12 @@ async function companyTasks(services: Services, companyId: string): Promise<Stan
     limit: 200,
   });
   return all.data as StandingTask[];
+}
+
+/** The workspace's members as stored, each with the email it signs in with. */
+async function listMembers(services: Services): Promise<WorkspaceMember[]> {
+  const all = await services.records.listAll("workspaceMembers", { limit: 200 });
+  return all.data as WorkspaceMember[];
 }
 
 /** The ticket as it will be stored, trimmed; a blank one is pushed onto `missing`. */
