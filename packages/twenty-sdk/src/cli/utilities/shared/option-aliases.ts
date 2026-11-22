@@ -98,6 +98,8 @@ export const OPTION_ALIAS_OVERRIDES: Readonly<Record<string, readonly string[]>>
   owes: ["ow"],
   // CCI#1362: tasks create — "moves-by" would derive "mb", max-bytes's alias.
   "moves-by": ["mvb"],
+  // CCI#1363: tasks close — "proof-line" would derive "pl", proof-label's alias.
+  "proof-line": ["pln"],
 });
 
 export function collectOptionAliasEntries(program: Command): OptionAliasEntry[] {

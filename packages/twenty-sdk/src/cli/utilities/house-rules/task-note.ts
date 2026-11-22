@@ -3,42 +3,85 @@
  *
  * The house's CRM design fixes what a Task's note holds: an open Task's note holds the
  * address of the artifact it rests on and, where there is one, the GitHub issue the work
- * sits on; a closed Task's note ends in one line, `Closed DD.MM · proof: [what it is](address)`
- * (https://docs.wilsch-ai.com/partner-lead-crm-design Part 2). This module is that shape as
- * code: `emitOpenNote` / `appendClosingLine` write it, `checkTaskNote` refuses anything else.
+ * sits on; a closed Task's note ends in one line,
+ * `Closed DD.MM · proof: "the line" — [what it is](address)`, the sentence that closed the Task,
+ * quoted, and the artifact that holds it (https://docs.wilsch-ai.com/partner-lead-crm-design
+ * Part 2; A Task's Life Part 5; CCI#1363). This module is that shape as code: `emitOpenNote` /
+ * `appendClosingLine` write it, `checkTaskNote` refuses anything else.
  *
  * The rendering, one markdown paragraph per line:
  *
  *   Rests on: [Svend, Ticket #20049, 05.10](https://mail.google.com/...)
  *   Issue: [DaveX2001/deliverable-tracking#2296](https://github.com/DaveX2001/deliverable-tracking/issues/2296)
- *   Closed 06.10 · proof: [Gregor, 02.10: access is set up](https://mail.google.com/...)
+ *   Closed 06.10 · proof: "Access is set up for all three of you." — [Gregor, 02.10](https://mail.google.com/...)
  *
  * `Issue:` is optional; the closing line is present exactly when the Task is done, and last.
  * Nothing else is part of the note: a retelling of the artifact is what the artifact is for —
  * save one line per close made in error (CCI#1341). Reopening a Task turns its closing line
  * into
  *
- *   Closed 06.10 in error — reopened 16.11: the reply was on another matter · proof was: [Gregor, 02.10: access is set up](https://mail.google.com/...)
+ *   Closed 06.10 in error — reopened 16.11: the reply was on another matter · proof was: "Access is set up for all three of you." — [Gregor, 02.10](https://mail.google.com/...)
  *
- * keeping the wrong close's date and proof, dated the day of the reopening, with why; the
- * Task is back to to do and can be closed again, its new proof line last (A Task's Life,
- * Parts 4 and 5). `reopenNote` writes it, `reopeningProblems` tells a reopening from any other
- * rewrite of a done Task's note, which stays refused. `sql/house-shape.sql` in
- * crm-2990-twenty holds the same rule in the store.
+ * keeping the wrong close's date and proof as they stood, dated the day of the reopening, with
+ * why; the Task is back to to do and can be closed again, its new proof line last (A Task's
+ * Life, Parts 4 and 5). `reopenNote` writes it, `reopeningProblems` tells a reopening from any
+ * other rewrite of a done Task's note, which stays refused.
+ *
+ * The earlier close, `Closed DD.MM · proof: [what it is](address)` with no quoted line, is what
+ * every Task closed before CCI#1363 ends in. It is read, left standing and reopened (its reopen
+ * line keeps it as it stood, `proof was: [what it is](address)`); a close written now never
+ * takes it, so `checkTaskNote` refuses it on the write that closes a Task.
+ *
+ * The eighth move (A Task's Life Part 5): `restOnSent` moves the note of a Task written on a
+ * draft onto the sent mail the draft became, the Rests on line's address alone changing.
+ *
+ * `sql/house-shape.sql` in crm-2990-twenty holds the same rule in the store.
  */
 
 export const DEFAULT_ISSUE_REPO = "DaveX2001/deliverable-tracking";
 
 const RESTS_ON = /^Rests on: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
 const ISSUE = /^Issue: \[([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)\]\(([^\s)]+)\)$/;
-const CLOSED = /^Closed (\d{2})\.(\d{2}) · proof: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
+/** The close as it is written now: its date, the line quoted, the proof's label and address. */
+const CLOSED = /^Closed (\d{2})\.(\d{2}) · proof: "(.+)" — \[([^\]\n]+)\]\(([^\s)]+)\)$/;
+/** The close every Task closed before CCI#1363 carries, with no quoted line: read, never written. */
+const CLOSED_EARLIER = /^Closed (\d{2})\.(\d{2}) · proof: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
+/**
+ * Groups: 1–2 the close's DD.MM, 3–4 the reopening's, 5 why, 6 the quoted line (absent when
+ * the wrong close was an earlier one), 7 the proof's label, 8 its address.
+ */
 const REOPENED =
-  /^Closed (\d{2})\.(\d{2}) in error — reopened (\d{2})\.(\d{2}): (.+) · proof was: \[([^\]\n]+)\]\(([^\s)]+)\)$/;
+  /^Closed (\d{2})\.(\d{2}) in error — reopened (\d{2})\.(\d{2}): (.+) · proof was: (?:"(.+)" — )?\[([^\]\n]+)\]\(([^\s)]+)\)$/;
 
 export const RESTS_ON_SHAPE = "Rests on: [what it is](address)";
-export const CLOSED_SHAPE = "Closed DD.MM · proof: [what it is](address)";
+export const CLOSED_SHAPE = 'Closed DD.MM · proof: "the line" — [what it is](address)';
+export const CLOSED_EARLIER_SHAPE = "Closed DD.MM · proof: [what it is](address)";
 export const REOPENED_SHAPE =
-  "Closed DD.MM in error — reopened DD.MM: why · proof was: [what it is](address)";
+  'Closed DD.MM in error — reopened DD.MM: why · proof was: "the line" — [what it is](address)';
+
+/** A closing line as read; an earlier close carries no quoted line. */
+interface ClosedLine {
+  dd: string;
+  mm: string;
+  quote?: string;
+  label: string;
+  url: string;
+}
+
+/** The closing line `line` is, in either shape, or undefined when it is none. */
+function matchClosed(line: string | undefined): ClosedLine | undefined {
+  if (line === undefined) return undefined;
+  const now = line.match(CLOSED);
+  if (now) return { dd: now[1]!, mm: now[2]!, quote: now[3]!, label: now[4]!, url: now[5]! };
+  const earlier = line.match(CLOSED_EARLIER);
+  if (earlier) return { dd: earlier[1]!, mm: earlier[2]!, label: earlier[3]!, url: earlier[4]! };
+  return undefined;
+}
+
+/** The proof as a closing or reopen line carries it: `"the line" — [label](url)`, or an earlier close's `[label](url)`. */
+function proofOf(closed: { quote?: string; label: string; url: string }): string {
+  return `${closed.quote === undefined ? "" : `"${closed.quote}" — `}[${closed.label}](${closed.url})`;
+}
 
 export interface IssueRef {
   owner: string;
@@ -118,8 +161,25 @@ export function emitOpenNote(input: {
   return lines.join("\n\n");
 }
 
-export function closingLine(label: string, url: string, now: Date = new Date()): string {
-  return `Closed ${formatDayMonth(now)} · proof: [${label.trim()}](${url})`;
+/** Whether the line quoted from the proof is one line of text. */
+export function quoteProblem(line: string | undefined): string | undefined {
+  if (line === undefined || line.trim() === "") {
+    return "the close does not quote the line that closed it";
+  }
+  if (/[\n\r]/.test(line)) return "the quoted line may not contain a line break";
+  return undefined;
+}
+
+/** `Closed DD.MM · proof: "the line" — [what it is](address)`, dated `now`. */
+export function closingLine(
+  proof: { line: string; label: string; url: string },
+  now: Date = new Date(),
+): string {
+  return `Closed ${formatDayMonth(now)} · proof: ${proofOf({
+    quote: proof.line.trim(),
+    label: proof.label.trim(),
+    url: proof.url,
+  })}`;
 }
 
 export function appendClosingLine(note: string, line: string): string {
@@ -151,7 +211,7 @@ export function reopenNote(
   now: Date = new Date(),
 ): { markdown?: string; problems: string[] } {
   const lines = noteLines(markdown);
-  const closed = lines[lines.length - 1]?.match(CLOSED);
+  const closed = matchClosed(lines[lines.length - 1]);
   if (!closed) {
     return {
       problems: [
@@ -159,9 +219,36 @@ export function reopenNote(
       ],
     };
   }
-  const [, dd, mm, label, url] = closed;
-  const line = `Closed ${dd}.${mm} in error — reopened ${formatDayMonth(now)}: ${why.trim()} · proof was: [${label}](${url})`;
+  const line = `Closed ${closed.dd}.${closed.mm} in error — reopened ${formatDayMonth(now)}: ${why.trim()} · proof was: ${proofOf(closed)}`;
   return { markdown: [...lines.slice(0, -1), line].join("\n\n"), problems: [] };
+}
+
+/**
+ * The eighth move (A Task's Life Part 5): the note of a Task written on a draft, moved onto
+ * the sent mail the draft became. The Rests on line's address becomes `sentUrl`; its label,
+ * the issue line and every other line stand as they were. Problems are returned when the note
+ * does not open with a Rests on line, or already rests on `sentUrl`.
+ */
+export function restOnSent(
+  markdown: string,
+  sentUrl: string,
+): { markdown?: string; draftUrl?: string; problems: string[] } {
+  const lines = noteLines(markdown);
+  const restsOn = lines[0]?.match(RESTS_ON);
+  if (!restsOn) {
+    return {
+      problems: [
+        `the note does not open with the address it rests on (${RESTS_ON_SHAPE}), so there is no draft to move off`,
+      ],
+    };
+  }
+  const [, label, draftUrl] = restsOn;
+  if (draftUrl === sentUrl) return { problems: [`the note already rests on ${sentUrl}`] };
+  return {
+    markdown: [`Rests on: [${label}](${sentUrl})`, ...lines.slice(1)].join("\n\n"),
+    draftUrl,
+    problems: [],
+  };
 }
 
 /**
@@ -182,15 +269,20 @@ export function reopeningProblems(
   if (old.length === 0 || next.length !== old.length) {
     return [`${rule}: the reopening rewrites the closing line alone`];
   }
-  const closed = old[old.length - 1]!.match(CLOSED);
+  const closed = matchClosed(old[old.length - 1]);
   const reopened = next[next.length - 1]!.match(REOPENED);
   if (!closed || !reopened) return [`${rule}: the closing line becomes ${REOPENED_SHAPE}`];
   if (old.slice(0, -1).some((line, i) => line !== next[i])) {
     return [`${rule}: the reopening rewrites the closing line alone`];
   }
-  const [, cd, cm, label, url] = closed;
-  const [, rd, rm, od, om, why, rLabel, rUrl] = reopened;
-  if (rd !== cd || rm !== cm || rLabel !== label || rUrl !== url) {
+  const [, rd, rm, od, om, why, rQuote, rLabel, rUrl] = reopened;
+  if (
+    rd !== closed.dd ||
+    rm !== closed.mm ||
+    rQuote !== closed.quote ||
+    rLabel !== closed.label ||
+    rUrl !== closed.url
+  ) {
     return [`${rule}: the reopen line must keep the wrong close's date and proof as they stood`];
   }
   if (check.reopenDates && !check.reopenDates.includes(`${od}.${om}`)) {
@@ -269,13 +361,13 @@ export function checkTaskNote(markdown: unknown, check: NoteCheck): string[] {
 
   const rest = lines.slice(index);
   const last = rest.length > 0 ? rest[rest.length - 1]! : undefined;
-  const closed = last?.match(CLOSED);
+  const closed = matchClosed(last);
   const extra = closed ? rest.slice(0, -1) : rest;
 
   for (const line of extra) {
     const reopened = line.match(REOPENED);
     if (reopened) {
-      const [, cd, cm, od, om, why, label, url] = reopened;
+      const [, cd, cm, od, om, why, , label, url] = reopened;
       if (
         ![
           [cd, cm],
@@ -298,7 +390,7 @@ export function checkTaskNote(markdown: unknown, check: NoteCheck): string[] {
       continue;
     }
     problems.push(
-      CLOSED.test(line)
+      matchClosed(line)
         ? `the closing line "${excerpt(line)}" is not the note's last line`
         : `the note carries a line outside its shape: "${excerpt(line)}" — a note holds the address it rests on, the issue, a line for each close made in error, and on close the proof line, nothing else`,
     );
@@ -310,7 +402,17 @@ export function checkTaskNote(markdown: unknown, check: NoteCheck): string[] {
         `the Task is done but its note does not end in its proof line — the close is missing ${CLOSED_SHAPE}`,
       );
     } else {
-      const [, dd, mm, label, url] = closed;
+      const { dd, mm, quote, label, url } = closed;
+      if (quote === undefined) {
+        // An earlier close stands on a Task closed before CCI#1363; a close written now quotes.
+        if (check.closingDates) {
+          problems.push(
+            `the close does not quote the line that closed it — its last line must be ${CLOSED_SHAPE}, found "${excerpt(last!)}"`,
+          );
+        }
+      } else if (quote.trim() === "") {
+        problems.push("the close does not quote the line that closed it — the quotes are empty");
+      }
       const day = Number(dd);
       const month = Number(mm);
       if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) {
