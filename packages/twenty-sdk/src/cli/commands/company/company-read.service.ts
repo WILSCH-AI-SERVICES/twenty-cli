@@ -46,11 +46,17 @@ export interface CompanyRead {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const URL_IN_TEXT = /https?:\/\/[^\s)<>\]"']+/g;
 const ID_CHUNK = 50;
+/** The largest page the REST API serves; a smaller one only adds round trips. */
+const PAGE = 200;
+/** Open is any status but DONE, and a Task with no status is open: SQL's neq alone drops NULLs. */
+const OPEN_TASK = "or(status[neq]:DONE,status[is]:NULL)";
 
 /**
  * Fetch everything the one read needs, each list paged to completion: the Company (by id
  * or by name), its People, its Opportunities, every taskTarget on the Company or on any of
- * its Opportunities, those Tasks, and the workspace members who can be assigned.
+ * its Opportunities, those Tasks still open, and the workspace members who can be assigned.
+ * Every request that does not need another's answer goes out beside it, because on a slow
+ * line the read costs one round trip per request made in a row.
  */
 export async function fetchCompanyRead(
   records: RecordsService,
@@ -59,24 +65,24 @@ export async function fetchCompanyRead(
   const company = await resolveCompany(records, ref);
   const companyId = company.id as string;
 
-  const [people, opportunities, workspaceMembers] = await Promise.all([
+  const [people, opportunities, workspaceMembers, companyTargets] = await Promise.all([
     listAll(records, "people", `companyId[eq]:"${companyId}"`),
     listAll(records, "opportunities", `companyId[eq]:"${companyId}"`),
     listAll(records, "workspaceMembers"),
+    listAll(records, "taskTargets", `targetCompanyId[eq]:"${companyId}"`),
   ]);
 
   const opportunityIds = opportunities.map((o) => o.id as string);
-  const taskTargets = [
-    ...(await listAll(records, "taskTargets", `targetCompanyId[eq]:"${companyId}"`)),
-    ...(await listByIds(records, "taskTargets", "targetOpportunityId", opportunityIds)),
-  ];
-  const taskIds = unique(taskTargets.map((t) => t.taskId as string).filter(Boolean));
-  const tasks = await listByIds(records, "tasks", "id", taskIds);
-
   const partnerIds = unique(
     opportunities.map((o) => o.partnerSourcedId as string | null).filter(isString),
   );
-  const partners = await listByIds(records, "companies", "id", partnerIds);
+  const [opportunityTargets, partners] = await Promise.all([
+    listByIds(records, "taskTargets", "targetOpportunityId", opportunityIds),
+    listByIds(records, "companies", "id", partnerIds),
+  ]);
+  const taskTargets = [...companyTargets, ...opportunityTargets];
+  const taskIds = unique(taskTargets.map((t) => t.taskId as string).filter(Boolean));
+  const tasks = await listByIds(records, "tasks", "id", taskIds, OPEN_TASK);
 
   return {
     company,
@@ -187,22 +193,30 @@ async function resolveCompany(records: RecordsService, ref: string): Promise<Row
 }
 
 async function listAll(records: RecordsService, object: string, filter?: string): Promise<Row[]> {
-  const { data } = await records.listAll(object, filter ? { filter } : {});
+  const { data } = await records.listAll(
+    object,
+    filter ? { filter, limit: PAGE } : { limit: PAGE },
+  );
   return data.filter(isRow);
 }
 
+/** Every chunk of ids at once, each narrowed by `also` when given; rows come back in chunk order. */
 async function listByIds(
   records: RecordsService,
   object: string,
   field: string,
   ids: string[],
+  also?: string,
 ): Promise<Row[]> {
-  const rows: Row[] = [];
-  for (let i = 0; i < ids.length; i += ID_CHUNK) {
-    const chunk = ids.slice(i, i + ID_CHUNK).map((id) => `"${id}"`);
-    rows.push(...(await listAll(records, object, `${field}[in]:[${chunk.join(",")}]`)));
-  }
-  return rows;
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ID_CHUNK) chunks.push(ids.slice(i, i + ID_CHUNK));
+  const pages = await Promise.all(
+    chunks.map((chunk) => {
+      const filter = `${field}[in]:[${chunk.map((id) => `"${id}"`).join(",")}]`;
+      return listAll(records, object, also ? `${filter},${also}` : filter);
+    }),
+  );
+  return pages.flat();
 }
 
 /** Copy a record's own fields, dropping store bookkeeping, and swap each named id for its name. */
