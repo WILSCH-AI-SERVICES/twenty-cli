@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { assembleCompanyRead, type CompanyReadSource } from "../company-read.service";
+import type { RecordsService } from "../../../utilities/records/services/records.service";
+import {
+  assembleCompanyRead,
+  fetchCompanyRead,
+  type CompanyReadSource,
+} from "../company-read.service";
 
 const CO = "c0000000-0000-4000-8000-000000000000";
 const OPP = "o0000000-0000-4000-8000-000000000000";
@@ -112,5 +117,63 @@ describe("assembleCompanyRead", () => {
       "searchVector",
     ])
       expect(json).not.toContain(`"${key}"`);
+  });
+});
+
+describe("fetchCompanyRead", () => {
+  const TASKS = 120; // more than two chunks of 50 ids
+
+  /** A store that answers by object and records every list it is asked for, and how many ran at once. */
+  function fakeRecords() {
+    const calls: Array<{ object: string; filter?: string; limit?: number }> = [];
+    let inFlight = 0;
+    const peak: Record<string, number> = {};
+    const rows: Record<string, Array<Record<string, unknown>>> = {
+      companies: [{ id: CO, name: "Lead GmbH" }],
+      people: [],
+      opportunities: [{ id: OPP, name: "Angebot 1", companyId: CO }],
+      workspaceMembers: [],
+      taskTargets: Array.from({ length: TASKS }, (_, i) => ({
+        taskId: `t-${i}`,
+        targetCompanyId: CO,
+      })),
+      tasks: [],
+    };
+    const records = {
+      async listAll(object: string, options: { filter?: string; limit?: number } = {}) {
+        calls.push({ object, filter: options.filter, limit: options.limit });
+        inFlight += 1;
+        peak[object] = Math.max(peak[object] ?? 0, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        const data =
+          object === "taskTargets" && options.filter?.includes("targetOpportunityId")
+            ? []
+            : (rows[object] ?? []);
+        return { data };
+      },
+    } as unknown as RecordsService;
+    return { records, calls, peak };
+  }
+
+  it("asks only for open Tasks, a Task with no status counted open", async () => {
+    const { records, calls } = fakeRecords();
+    await fetchCompanyRead(records, "Lead GmbH");
+    const taskCalls = calls.filter((c) => c.object === "tasks");
+    expect(taskCalls).toHaveLength(3);
+    for (const call of taskCalls)
+      expect(call.filter).toMatch(/^id\[in\]:\[.+\],or\(status\[neq\]:DONE,status\[is\]:NULL\)$/);
+  });
+
+  it("asks for the largest page on every list", async () => {
+    const { records, calls } = fakeRecords();
+    await fetchCompanyRead(records, "Lead GmbH");
+    expect(calls.every((c) => c.limit === 200)).toBe(true);
+  });
+
+  it("sends the chunks of Task ids at once, not one after another", async () => {
+    const { records, peak } = fakeRecords();
+    await fetchCompanyRead(records, "Lead GmbH");
+    expect(peak.tasks).toBe(3);
   });
 });
